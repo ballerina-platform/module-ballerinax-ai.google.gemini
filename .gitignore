@@ -22,3 +22,38 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# Gradle
+.gradle/
+build/
+gradle-app.setting
+.gradletasknamecache
+
+# Ballerina
+target/
+Ballerina.lock
+.ballerina
+
+# gradle wrapper
+!gradle-wrapper.jar
+
+# mac
+.DS_Store
+
+# IDE
+.classpath
+.project
+.settings
+.vscode
+.idea
+
+# ignore examples auto generated files
+examples/**/Dependencies.toml
+examples/**/Config.toml
+examples/**/target
+ballerina/Config.toml
+ballerina/sample*
+docker.env
+
+# ignore ballerina installer in github runner
+*.deb
