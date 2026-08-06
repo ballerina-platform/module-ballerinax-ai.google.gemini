@@ -17,6 +17,9 @@
 import ballerina/http;
 import ballerina/test;
 
+// Stands in for the opaque base64 blob Gemini 3 returns on a `functionCall` part.
+const MOCK_THOUGHT_SIGNATURE = "CtIBAVSoXO9sig1234567890abcdefGHIJKLMNOP+/=";
+
 // Mock Gemini API. The connector posts to `${serviceUrl}/models/{model}:{action}`,
 // so a single resource captures `models/<model>:<action>` as one path segment and
 // dispatches on the action suffix. For `:generateContent`, the request body is
@@ -49,6 +52,21 @@ service /llm on new http:Listener(8080) {
         }
         if promptText.startsWith("Weather follow-up") {
             return buildTextResponse("It is 20 degrees in Paris.");
+        }
+        // Two legs of one conversation: the tool call, then the answer once the result
+        // comes back. The follow-up is what carries the replayed model turn, so its
+        // request shape is asserted in `validateGenerateContentRequest`.
+        if promptText.startsWith("Signature round-trip") {
+            return contentCount(payload) >= 3
+                ? buildTextResponse("It is 20 degrees in Colombo.")
+                : buildToolCallResponse("getWeather", {city: "Colombo"});
+        }
+        // Two calls in one model turn, signed once — the shape that produced the
+        // "position 4" failures before the turn was reassembled.
+        if promptText.startsWith("Parallel tool calls") {
+            return contentCount(payload) >= 3
+                ? buildTextResponse("One BAL share is 41981.81 LKR.")
+                : buildParallelToolCallResponse();
         }
         if promptText.startsWith("Tool schema passthrough") {
             return buildToolCallResponse("getWeather", {city: "Paris"});
@@ -150,6 +168,58 @@ function validateGenerateContentRequest(string promptText, json payload) {
         test:assertTrue(fnPart.hasKey("functionResponse"), "expected a functionResponse part");
         map<json> functionResponse = <map<json>>fnPart["functionResponse"];
         test:assertEquals(functionResponse["name"], "getWeather");
+    }
+
+    if promptText.startsWith("Signature round-trip") && contentCount(payload) >= 3 {
+        // The follow-up request. Gemini 3 rejects a replayed `functionCall` part that has
+        // lost the `thoughtSignature` it was returned with — that is the 400 this whole
+        // path exists to prevent — and rejects a signature moved onto another part.
+        json[] contentsArr = <json[]>(<map<json>>payload)["contents"];
+        map<json> modelTurn = <map<json>>contentsArr[1];
+        map<json> modelPart = <map<json>>(<json[]>modelTurn["parts"])[0];
+        test:assertEquals(modelPart["thoughtSignature"], MOCK_THOUGHT_SIGNATURE,
+                "the replayed functionCall part must carry back the thoughtSignature Gemini returned");
+        map<json> functionCall = <map<json>>modelPart["functionCall"];
+        test:assertEquals(functionCall["id"], "call-1",
+                "only Gemini's own id may go on the wire; the packed signature must be stripped");
+        test:assertFalse(functionCall.hasKey("thoughtSignature"),
+                "the signature belongs on the part, not inside functionCall");
+
+        map<json> fnPart = <map<json>>(<json[]>(<map<json>>contentsArr[2])["parts"])[0];
+        map<json> functionResponse = <map<json>>fnPart["functionResponse"];
+        test:assertEquals(functionResponse["id"], "call-1",
+                "the tool result must correlate by Gemini's id, not by the packed id");
+        test:assertFalse(fnPart.hasKey("thoughtSignature"),
+                "a functionResponse part must not carry a signature");
+    }
+
+    if promptText.startsWith("Parallel tool calls") && contentCount(payload) >= 3 {
+        // The agent replays a parallel batch as one assistant message per call, which
+        // would put the unsigned call in a content entry of its own — the 400. The turn
+        // must be reassembled into the single model entry Gemini emitted, with both
+        // results paired against it.
+        json[] contentsArr = <json[]>(<map<json>>payload)["contents"];
+        test:assertEquals(contentsArr.length(), 3,
+                "a parallel batch must collapse back to user + model + results, not one pair per call");
+
+        map<json> modelTurn = <map<json>>contentsArr[1];
+        test:assertEquals(modelTurn["role"], "model");
+        json[] modelParts = <json[]>modelTurn["parts"];
+        test:assertEquals(modelParts.length(), 2, "both parallel calls belong to the same model turn");
+        map<json> first = <map<json>>modelParts[0];
+        test:assertEquals(first["thoughtSignature"], MOCK_THOUGHT_SIGNATURE,
+                "the turn's signature must ride on the part it arrived on");
+        test:assertEquals((<map<json>>first["functionCall"])["name"], "getStockPrice");
+        map<json> second = <map<json>>modelParts[1];
+        test:assertFalse(second.hasKey("thoughtSignature"),
+                "the continuation must not be given a signature it was never sent");
+        test:assertEquals((<map<json>>second["functionCall"])["name"], "getExchangeRate");
+
+        json[] resultParts = <json[]>(<map<json>>contentsArr[2])["parts"];
+        test:assertEquals(resultParts.length(), 2,
+                "both tool results belong to the single turn that requested them");
+        test:assertEquals((<map<json>>(<map<json>>resultParts[0])["functionResponse"])["id"], "call-1");
+        test:assertEquals((<map<json>>(<map<json>>resultParts[1])["functionResponse"])["id"], "call-2");
     }
 
     if promptText.startsWith("What's the weather using two tools") {
@@ -462,18 +532,60 @@ isolated function buildTextResponse(string text) returns json => {
         totalTokenCount: 55
     },
     responseId: "resp-abc123",
-    modelVersion: "gemini-2.5-flash-001"
+    modelVersion: "gemini-3.6-flash-07-2026"
 };
 
 isolated function buildToolCallResponse(string name, map<json> args) returns json => {
     candidates: [
         {
-            // Gemini emits an `id` on function calls so parallel calls can be correlated.
-            content: {role: "model", parts: [{functionCall: {id: "call-1", name, args}}]},
+            // The Gemini 3 shape: an `id` so parallel calls can be correlated, and a
+            // `thoughtSignature` on the same part, which must come back on the replay of
+            // this call or the next request is rejected with 400 INVALID_ARGUMENT.
+            content: {
+                role: "model",
+                parts: [{functionCall: {id: "call-1", name, args}, thoughtSignature: MOCK_THOUGHT_SIGNATURE}]
+            },
             finishReason: "STOP",
             index: 0
         }
     ],
     usageMetadata: {promptTokenCount: 12, candidatesTokenCount: 6, totalTokenCount: 18},
-    modelVersion: "gemini-2.5-flash"
+    modelVersion: "gemini-3.6-flash"
 };
+
+# Two tool calls in a single model turn, signed on the first part only — the shape Gemini
+# returns for parallel calls, confirmed against the live API.
+#
+# + return - The `:generateContent` response body
+isolated function buildParallelToolCallResponse() returns json => {
+    candidates: [
+        {
+            content: {
+                role: "model",
+                parts: [
+                    {
+                        functionCall: {id: "call-1", name: "getStockPrice", args: {symbol: "BAL"}},
+                        thoughtSignature: MOCK_THOUGHT_SIGNATURE
+                    },
+                    // No signature: Gemini signs the turn, not each call.
+                    {functionCall: {id: "call-2", name: "getExchangeRate", args: {currency: "LKR"}}}
+                ]
+            },
+            finishReason: "STOP",
+            index: 0
+        }
+    ],
+    usageMetadata: {promptTokenCount: 14, candidatesTokenCount: 8, totalTokenCount: 22},
+    modelVersion: "gemini-3.6-flash"
+};
+
+# Number of `contents` entries in a request, used to tell the first leg of a tool
+# conversation from the follow-up that replays the model's tool call.
+#
+# + payload - The `:generateContent` request body
+# + return - The number of `contents` entries, or 0 when there are none
+isolated function contentCount(json payload) returns int {
+    map<json> obj = payload is map<json> ? payload : {};
+    json contents = obj["contents"];
+    return contents is json[] ? contents.length() : 0;
+}

@@ -42,7 +42,6 @@ public class Generator {
                 modelProvider.get(StringUtils.fromString("modelType")),
                 modelProvider.get(StringUtils.fromString("temperature")),
                 modelProvider.get(StringUtils.fromString("maxTokens")),
-                modelProvider.get(StringUtils.fromString("allowPrivateDocumentHosts")),
                 prompt, expectedResponseTypedesc);
     }
 }

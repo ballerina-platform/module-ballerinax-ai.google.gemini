@@ -11,5 +11,7 @@ This file documents all significant changes made to the Ballerina `ai.google.gem
   - Native function calling (tool use) and structured output through Gemini's standard-JSON-Schema
     fields (`parametersJsonSchema` / `responseJsonSchema`), which accept `$ref`, `$defs`,
     `additionalProperties` and `prefixItems` without modification.
+  - Gemini 3 thought signatures preserved across tool-call round trips, including parallel calls,
+    which the API requires when a model turn is replayed in the conversation history.
   - Multimodal input through `generate` — images, PDFs, and Gemini File API references.
   - API-key authentication via the `x-goog-api-key` header.

@@ -29,7 +29,6 @@ const DEFAULT_GEMINI_SERVICE_URL = "https://generativelanguage.googleapis.com/v1
 # with `finishReason` "MAX_TOKENS" and no text part. This is a ceiling, not a target —
 # billing follows the tokens actually produced.
 const DEFAULT_MAX_TOKEN_COUNT = 65536;
-const DEFAULT_TEMPERATURE = 0.7d;
 
 # Header used to authenticate Gemini API requests with an API key.
 const API_KEY_HEADER = "x-goog-api-key";
@@ -61,7 +60,6 @@ public isolated distinct client class ModelProvider {
     private final GEMINI_MODEL_NAMES modelType;
     private final decimal? temperature;
     private final int maxTokens;
-    private final boolean allowPrivateDocumentHosts;
 
     # Initializes the Gemini model with the given connection configuration and model configuration.
     #
@@ -74,13 +72,6 @@ public isolated distinct client class ModelProvider {
     #                 recommends leaving this unset for Gemini 3 models: values below the
     #                 default of `1.0` may cause looping or degraded performance on complex
     #                 reasoning tasks
-    # + allowPrivateDocumentHosts - Allows document URLs in a prompt to resolve to loopback,
-    #                               private, link-local or otherwise non-public addresses.
-    #                               Defaults to `true`, so internal document hosts work without
-    #                               extra configuration. Gemini cannot fetch URLs itself, so the
-    #                               connector downloads them from this service; set to `false`
-    #                               when document URLs may come from an untrusted source, to stop
-    #                               them being used to probe internal services
     # + connectionConfig - Additional HTTP connection configuration
     # + return - `()` on successful initialization; otherwise, returns an `ai:Error`
     public isolated function init(@display {label: "API Key"} string apiKey,
@@ -88,7 +79,6 @@ public isolated distinct client class ModelProvider {
             @display {label: "Service URL"} string serviceUrl = DEFAULT_GEMINI_SERVICE_URL,
             @display {label: "Maximum Tokens"} int maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
-            @display {label: "Allow Private Document Hosts"} boolean allowPrivateDocumentHosts = true,
             @display {label: "Connection Configuration"} *ConnectionConfig connectionConfig) returns ai:Error? {
         // `ConnectionConfig` is a field-compatible subset of `http:ClientConfiguration`
         // (it omits `auth` because Gemini authenticates via the `x-goog-api-key`
@@ -102,7 +92,6 @@ public isolated distinct client class ModelProvider {
         self.modelType = modelType;
         self.temperature = temperature;
         self.maxTokens = maxTokens;
-        self.allowPrivateDocumentHosts = allowPrivateDocumentHosts;
     }
 
     # Sends a chat request to the Gemini model with the given messages and tools.
@@ -169,7 +158,7 @@ public isolated distinct client class ModelProvider {
             span.close(err);
             return err;
         }
-        span.addOutputMessages(message);
+        span.addOutputMessages(stripThoughtSignatures(message));
         span.addOutputType(observe:TEXT);
         span.close();
         return message;
@@ -201,7 +190,9 @@ public isolated distinct client class ModelProvider {
         if messages is ai:ChatUserMessage {
             contents.push({role: GEMINI_ROLE_USER, parts: [{text: check getChatMessageStringContent(messages.content)}]});
         } else {
-            foreach ai:ChatMessage message in messages {
+            int index = 0;
+            while index < messages.length() {
+                ai:ChatMessage message = messages[index];
                 if message is ai:ChatSystemMessage {
                     string systemText = check getChatMessageStringContent(message.content);
                     if systemInstruction is Content {
@@ -212,15 +203,18 @@ public isolated distinct client class ModelProvider {
                     } else {
                         systemInstruction = {parts: [{text: systemText}]};
                     }
+                    index += 1;
                 } else if message is ai:ChatUserMessage {
                     contents.push({role: GEMINI_ROLE_USER, parts: [{text: check getChatMessageStringContent(message.content)}]});
+                    index += 1;
                 } else if message is ai:ChatAssistantMessage {
-                    Content? assistantContent = buildAssistantContent(message);
-                    if assistantContent is Content {
-                        contents.push(assistantContent);
-                    }
-                } else if message is ai:ChatFunctionMessage {
-                    contents.push(buildFunctionResponseContent(message));
+                    // Consumes the tool results that follow it, and any continuation of the
+                    // same parallel batch, so the whole exchange lands in the two content
+                    // entries Gemini expects rather than one pair per call.
+                    index = appendAssistantTurn(messages, index, contents);
+                } else {
+                    contents.push(buildFunctionResponseContent(<ai:ChatFunctionMessage>message));
+                    index += 1;
                 }
             }
         }
@@ -267,7 +261,12 @@ isolated function convertCandidateToAssistantMessage(Candidate candidate) return
         FunctionCall? functionCall = part.functionCall;
         if functionCall is FunctionCall {
             ai:FunctionCall call = {name: functionCall.name, arguments: functionCall.args ?: {}};
-            string? id = functionCall.id;
+            // Gemini 3 rejects a replay of this call that has lost the signature it arrived
+            // with, and `ai:FunctionCall` has no field to hold one, so it rides on the id.
+            // On parallel calls Gemini signs the first part — the signature covers the whole
+            // turn — so the rest are marked as continuations of it, and a signature on one of
+            // them is carried too rather than discarded by the marking.
+            string? id = packToolCallId(functionCall.id, part.thoughtSignature, toolCalls.length() > 0);
             if id is string {
                 call.id = id;
             }
@@ -284,14 +283,56 @@ isolated function convertCandidateToAssistantMessage(Candidate candidate) return
     return assistantMessage;
 }
 
-# Builds a `model`-role content from an assistant message, emitting text and/or
-# `functionCall` parts. Returns `()` when the message carries neither content nor
-# tool calls, so the caller can omit it rather than send an empty (or empty-text)
-# part, which Gemini rejects.
+# Rebuilds one model turn, starting from the assistant message at `startIndex`, and
+# appends it — with the tool results that answer it — to `contents`.
+#
+# Gemini returns every parallel tool call as one model turn, signing only the first part;
+# the signature covers the turn as a whole. The agent runtime replays that turn as one
+# assistant message per call, which strands the unsigned calls in content entries of their
+# own, and Gemini rejects those: "Function call is missing a thought_signature in
+# functionCall parts". Folding the continuations back in restores the exact shape Gemini
+# emitted, which is also what the official SDKs send.
+#
+# The tool results are gathered into a single `user` entry for the same reason — that is
+# how Gemini pairs a batch of calls with its results.
+#
+# + messages - The full message list
+# + startIndex - Index of the assistant message opening the turn
+# + contents - The contents being assembled; the model turn and its results are appended
+# + return - The index of the first message not consumed
+isolated function appendAssistantTurn(ai:ChatMessage[] messages, int startIndex, Content[] contents) returns int {
+    ai:ChatMessage message = messages[startIndex];
+    Part[] parts = message is ai:ChatAssistantMessage ? assistantParts(message) : [];
+    Part[] resultParts = [];
+    int next = startIndex + 1;
+    while next < messages.length() {
+        ai:ChatMessage following = messages[next];
+        if following is ai:ChatFunctionMessage {
+            resultParts.push(functionResponsePart(following));
+        } else if following is ai:ChatAssistantMessage && continuesToolCallBatch(following) {
+            parts.push(...assistantParts(following));
+        } else {
+            break;
+        }
+        next += 1;
+    }
+    // An assistant message carrying neither content nor tool calls yields no parts; it is
+    // omitted rather than sent as an empty (or empty-text) part, which Gemini rejects.
+    if parts.length() > 0 {
+        contents.push({role: GEMINI_ROLE_MODEL, parts});
+    }
+    if resultParts.length() > 0 {
+        contents.push({role: GEMINI_ROLE_USER, parts: resultParts});
+    }
+    return next;
+}
+
+# Builds the `model`-role parts for an assistant message: its text, then one `functionCall`
+# part per tool call, each carrying back the thought signature packed onto its id.
 #
 # + message - The assistant message to convert
-# + return - The corresponding Gemini content, or `()` when there is nothing to send
-isolated function buildAssistantContent(ai:ChatAssistantMessage message) returns Content? {
+# + return - The parts, empty when the message carries neither content nor tool calls
+isolated function assistantParts(ai:ChatAssistantMessage message) returns Part[] {
     Part[] parts = [];
     string? content = message?.content;
     if content is string && content.length() > 0 {
@@ -301,17 +342,22 @@ isolated function buildAssistantContent(ai:ChatAssistantMessage message) returns
     if toolCalls is ai:FunctionCall[] {
         foreach ai:FunctionCall functionCall in toolCalls {
             FunctionCall call = {name: functionCall.name, args: functionCall.arguments};
-            string? id = functionCall.id;
+            // The signature was packed onto the id on the way out; it belongs on the part,
+            // not inside `functionCall`, and only Gemini's own id may go back on the wire.
+            ToolCallId toolCallId = unpackToolCallId(functionCall.id);
+            string? id = toolCallId.id;
             if id is string {
                 call.id = id;
             }
-            parts.push({functionCall: call});
+            Part part = {functionCall: call};
+            string? signature = toolCallId.signature;
+            if signature is string {
+                part.thoughtSignature = signature;
+            }
+            parts.push(part);
         }
     }
-    if parts.length() == 0 {
-        return ();
-    }
-    return {role: GEMINI_ROLE_MODEL, parts};
+    return parts;
 }
 
 # Builds a `functionResponse` content from a tool-result message.
@@ -326,7 +372,15 @@ isolated function buildAssistantContent(ai:ChatAssistantMessage message) returns
 #
 # + message - The function/tool result message
 # + return - The corresponding Gemini content
-isolated function buildFunctionResponseContent(ai:ChatFunctionMessage message) returns Content {
+isolated function buildFunctionResponseContent(ai:ChatFunctionMessage message) returns Content =>
+    {role: GEMINI_ROLE_USER, parts: [functionResponsePart(message)]};
+
+# Builds the `functionResponse` part for a tool-result message. See
+# `buildFunctionResponseContent` for how the result payload is shaped.
+#
+# + message - The function/tool result message
+# + return - The corresponding part
+isolated function functionResponsePart(ai:ChatFunctionMessage message) returns Part {
     map<json> response = {};
     string? content = message?.content;
     if content is string {
@@ -343,11 +397,13 @@ isolated function buildFunctionResponseContent(ai:ChatFunctionMessage message) r
         }
     }
     FunctionResponse functionResponse = {name: message.name, response};
-    string? id = message?.id;
+    // The agent copies the tool-call id onto the result message, so this id may carry a
+    // packed signature or batch marker. Only Gemini's own id may be echoed back.
+    string? id = unpackToolCallId(message?.id).id;
     if id is string {
         functionResponse.id = id;
     }
-    return {role: GEMINI_ROLE_USER, parts: [{functionResponse}]};
+    return {functionResponse};
 }
 
 # Converts `ai` tool definitions into Gemini function declarations, sending the

@@ -18,7 +18,7 @@ The `ai.google.gemini` connector plugs Gemini into the Ballerina [`ai`](https://
 - **`chat` accepts text only.** Images, PDFs, and other documents are supported through `generate` (see [Multimodal input](#multimodal-input)); passing a non-text `ai:Document` to `chat` returns an error.
 - **Streaming is not available.** The `ai:ModelProvider` interface defines only `chat` and `generate`, so there is no streaming API to implement.
 - **Gemini Developer API only.** Vertex AI endpoints (`{location}-aiplatform.googleapis.com`, OAuth bearer credentials, `publishers/google/models/...` paths) are not supported.
-- **Document URLs are fetched by the connector.** Gemini cannot fetch arbitrary web URLs, so an `ai:Url` in a prompt is downloaded locally and sent inline. Only `http` and `https` are accepted. Internal destinations (loopback, private, link-local, carrier-grade-NAT) are permitted by default, so documents served from an internal host work out of the box. If document URLs may come from an untrusted source, set `allowPrivateDocumentHosts` to `false` — the connector then rejects those destinations on the initial request and on every redirect. Note the check applies to the literal host in the URL: a public DNS name that resolves to an internal address is not detected, so deployments handling untrusted URLs should also enforce an egress policy at the network layer.
+- **Document URLs are fetched by the connector.** Gemini cannot fetch arbitrary web URLs, so an `ai:Url` in a prompt is downloaded locally and sent inline. Only `http` and `https` are accepted, including on every redirect hop. No restriction is placed on the destination host: a URL that resolves to a loopback, private, link-local, or other internal address (including cloud metadata endpoints) is fetched the same as any public one. Applications that accept document URLs from untrusted end users are responsible for validating or restricting those URLs before passing them to this connector, or for enforcing an egress policy at the network layer.
 
 ## Prerequisites
 
@@ -98,7 +98,7 @@ To avoid the download entirely, upload via the Gemini File API and pass the resu
 
 ## Model selection
 
-`GEMINI_3_6_FLASH` is the current flagship Flash model and the recommended default. The `GEMINI_MODEL_NAMES` enum documents the status of every supported model, including shutdown dates for those scheduled for retirement — the `gemini-2.5` line retires on 2026-10-16.
+`GEMINI_3_6_FLASH` is the recommended default. The `GEMINI_MODEL_NAMES` enum documents the status of every supported model, including announced shutdown dates — `GEMINI_3_1_FLASH_LITE` retires on 2027-05-07 and the `gemini-2.5` line on 2026-10-16. The `gemini-2.5` models are also closed to new API keys: a key that has not used them before is refused with 404 "This model ... is no longer available to new users", so do not pick them for a new integration.
 
 For embeddings, `GEMINI_EMBEDDING_2` is the current model. `GEMINI_EMBEDDING_001` remains supported for text-only use cases.
 

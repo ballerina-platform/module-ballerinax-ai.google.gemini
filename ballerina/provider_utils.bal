@@ -97,10 +97,8 @@ isolated function getExpectedResponseSchema(typedesc<anydata> expectedResponseTy
 # `text` parts and image documents as `inlineData` parts.
 #
 # + prompt - The prompt whose interpolated strings and insertions are converted
-# + allowPrivateHosts - Allows document URLs to resolve to non-public addresses
 # + return - The ordered content parts, or an `ai:Error` for unsupported documents
-isolated function generateChatCreationContent(ai:Prompt prompt, boolean allowPrivateHosts)
-        returns Part[]|ai:Error {
+isolated function generateChatCreationContent(ai:Prompt prompt) returns Part[]|ai:Error {
     string[] & readonly strings = prompt.strings;
     anydata[] insertions = prompt.insertions;
     Part[] parts = [];
@@ -117,12 +115,12 @@ isolated function generateChatCreationContent(ai:Prompt prompt, boolean allowPri
         if insertion is ai:Document|ai:Chunk {
             addTextPart(accumulatedTextContent, parts);
             accumulatedTextContent = "";
-            check addDocumentPart(insertion, parts, allowPrivateHosts);
+            check addDocumentPart(insertion, parts);
         } else if insertion is (ai:Document|ai:Chunk)[] {
             addTextPart(accumulatedTextContent, parts);
             accumulatedTextContent = "";
             foreach ai:Document|ai:Chunk doc in insertion {
-                check addDocumentPart(doc, parts, allowPrivateHosts);
+                check addDocumentPart(doc, parts);
             }
         } else {
             accumulatedTextContent += insertion.toString();
@@ -134,16 +132,15 @@ isolated function generateChatCreationContent(ai:Prompt prompt, boolean allowPri
     return parts;
 }
 
-isolated function addDocumentPart(ai:Document|ai:Chunk doc, Part[] parts, boolean allowPrivateHosts)
-        returns ai:Error? {
+isolated function addDocumentPart(ai:Document|ai:Chunk doc, Part[] parts) returns ai:Error? {
     if doc is ai:TextDocument|ai:TextChunk {
         addTextPart(doc.content, parts);
         return;
     } else if doc is ai:ImageDocument {
-        parts.push(check buildImagePart(doc, allowPrivateHosts));
+        parts.push(check buildImagePart(doc));
         return;
     } else if doc is ai:FileDocument {
-        parts.push(check buildFilePart(doc, allowPrivateHosts));
+        parts.push(check buildFilePart(doc));
         return;
     }
     return error ai:Error("Only text, image and file documents are supported.");
@@ -156,9 +153,8 @@ isolated function addDocumentPart(ai:Document|ai:Chunk doc, Part[] parts, boolea
 # `Content-Type` for URLs.
 #
 # + doc - The file document
-# + allowPrivateHosts - Allows a document URL to resolve to a non-public address
 # + return - The corresponding part, or an `ai:Error` on failure
-isolated function buildFilePart(ai:FileDocument doc, boolean allowPrivateHosts) returns Part|ai:Error {
+isolated function buildFilePart(ai:FileDocument doc) returns Part|ai:Error {
     byte[]|ai:Url|ai:FileId content = doc.content;
     if content is ai:FileId {
         FileData fileData = {fileUri: content.fileId};
@@ -169,7 +165,7 @@ isolated function buildFilePart(ai:FileDocument doc, boolean allowPrivateHosts) 
         return {fileData};
     }
     if content is ai:Url {
-        [byte[], string?] downloaded = check downloadDocument(content, allowPrivateHosts);
+        [byte[], string?] downloaded = check downloadDocument(content);
         string? mimeType = doc.metadata?.mimeType ?: downloaded[1];
         if mimeType is () {
             return error ai:Error("A concrete file MIME type is required for Gemini; none was provided in " +
@@ -198,13 +194,12 @@ isolated function addTextPart(string content, Part[] parts) {
 # wildcard like `image/*`.
 #
 # + doc - The image document
-# + allowPrivateHosts - Allows a document URL to resolve to a non-public address
 # + return - The image part, or an `ai:Error` when the MIME type cannot be
 #            determined or the download fails
-isolated function buildImagePart(ai:ImageDocument doc, boolean allowPrivateHosts) returns Part|ai:Error {
+isolated function buildImagePart(ai:ImageDocument doc) returns Part|ai:Error {
     ai:Url|byte[] content = doc.content;
     if content is ai:Url {
-        [byte[], string?] downloaded = check downloadDocument(content, allowPrivateHosts);
+        [byte[], string?] downloaded = check downloadDocument(content);
         string? mimeType = doc.metadata?.mimeType ?: downloaded[1];
         if mimeType is () {
             return error ai:Error("A concrete image MIME type is required for Gemini; none was provided in " +
@@ -230,14 +225,13 @@ isolated function buildImagePart(ai:ImageDocument doc, boolean allowPrivateHosts
 # address after the initial check had already passed.
 #
 # + url - The URL to fetch
-# + allowPrivateHosts - Skips the non-public destination check when `true`
 # + return - The downloaded bytes and the response MIME type (`Content-Type`
 #            without parameters, `()` when absent), or an `ai:Error` on failure
-isolated function downloadDocument(ai:Url url, boolean allowPrivateHosts) returns [byte[], string?]|ai:Error {
+isolated function downloadDocument(ai:Url url) returns [byte[], string?]|ai:Error {
     string currentUrl = url;
     foreach int hop in 0 ... MAX_DOCUMENT_REDIRECTS {
         [string, string] originPath = check splitUrl(currentUrl);
-        check validateDownloadDestination(originPath[0], allowPrivateHosts);
+        check validateDownloadDestination(originPath[0]);
         http:Client|error downloadClient = new (originPath[0], {followRedirects: {enabled: false}});
         if downloadClient is error {
             return error ai:Error(string `Failed to create a client to download the document from '${url}'.`,
@@ -310,119 +304,16 @@ isolated function resolveRedirectTarget(string origin, string location) returns 
 
 # Rejects a download destination that the connector must not reach.
 #
-# Only `http` and `https` are permitted. Unless `allowPrivateHosts` is set, a host that
-# is a literal loopback, private, link-local, carrier-grade-NAT or unspecified address
-# is rejected, as is `localhost`.
-#
-# Note this checks the literal host in the URL. A public DNS name that resolves to an
-# internal address is not detected, because resolving it here and connecting separately
-# would still leave a TOCTOU gap. Deployments handling genuinely untrusted URLs should
-# pair this with an egress policy at the network layer.
+# Only `http` and `https` are permitted.
 #
 # + origin - The origin (`scheme://host[:port]`) to check
-# + allowPrivateHosts - Skips the non-public destination check when `true`
 # + return - `()` when the destination is permitted, otherwise an `ai:Error`
-isolated function validateDownloadDestination(string origin, boolean allowPrivateHosts) returns ai:Error? {
+isolated function validateDownloadDestination(string origin) returns ai:Error? {
     string lowered = origin.toLowerAscii();
     if !lowered.startsWith("http://") && !lowered.startsWith("https://") {
         return error ai:Error(string `Only 'http' and 'https' document URLs are supported, got '${origin}'.`);
     }
-    if allowPrivateHosts {
-        return;
-    }
-    string host = extractHost(lowered);
-    if isNonPublicHost(host) {
-        return error ai:Error(string `Refusing to download a document from '${host}', which is not a public ` +
-                "address. Set 'allowPrivateDocumentHosts' to true if documents are served from a trusted " +
-                "internal host.");
-    }
     return;
-}
-
-# Extracts the host from a lowercased origin, dropping the scheme, any port, and the
-# brackets around an IPv6 literal.
-#
-# + origin - The lowercased origin (`scheme://host[:port]`)
-# + return - The bare host
-isolated function extractHost(string origin) returns string {
-    int? schemeIdx = origin.indexOf("://");
-    string hostPort = schemeIdx is int ? origin.substring(schemeIdx + 3) : origin;
-    if hostPort.startsWith("[") {
-        int? closing = hostPort.indexOf("]");
-        return closing is int ? hostPort.substring(1, closing) : hostPort.substring(1);
-    }
-    int? portIdx = hostPort.indexOf(":");
-    return portIdx is int ? hostPort.substring(0, portIdx) : hostPort;
-}
-
-# Reports whether a literal host is a loopback, private, link-local, CGNAT or
-# unspecified address, or a `localhost` name.
-#
-# + host - The bare lowercased host
-# + return - `true` when the host must not be reached
-isolated function isNonPublicHost(string host) returns boolean {
-    if host == "localhost" || host.endsWith(".localhost") || host.length() == 0 {
-        return true;
-    }
-    int[]? octets = parseIpv4(host);
-    if octets is int[] {
-        return isNonPublicIpv4(octets);
-    }
-    if host.includes(":") {
-        // IPv6 literal. `::ffff:a.b.c.d` maps an IPv4 address into v6 space, so the
-        // embedded address is checked with the same rules rather than being let through.
-        int? lastColon = host.lastIndexOf(":");
-        if lastColon is int {
-            int[]? mapped = parseIpv4(host.substring(lastColon + 1));
-            if mapped is int[] {
-                return isNonPublicIpv4(mapped);
-            }
-        }
-        if host == "::1" || host == "::" {
-            return true;
-        }
-        // fc00::/7 (unique local) and fe80::/10 (link-local).
-        return host.startsWith("fc") || host.startsWith("fd")
-            || host.startsWith("fe8") || host.startsWith("fe9")
-            || host.startsWith("fea") || host.startsWith("feb");
-    }
-    return false;
-}
-
-isolated function isNonPublicIpv4(int[] octets) returns boolean {
-    int first = octets[0];
-    int second = octets[1];
-    // 0.0.0.0/8 unspecified, 127/8 loopback, 10/8 + 172.16/12 + 192.168/16 private,
-    // 169.254/16 link-local, 100.64/10 carrier-grade NAT, 192.0.0/24 IETF protocol.
-    return first == 0 || first == 127 || first == 10
-        || (first == 172 && second >= 16 && second <= 31)
-        || (first == 192 && second == 168)
-        || (first == 169 && second == 254)
-        || (first == 100 && second >= 64 && second <= 127)
-        || (first == 192 && second == 0 && octets[2] == 0);
-}
-
-# Parses a dotted-quad IPv4 literal.
-#
-# + host - The host to parse
-# + return - The four octets, or `()` when `host` is not an IPv4 literal
-isolated function parseIpv4(string host) returns int[]? {
-    string[] parts = re `\.`.split(host);
-    if parts.length() != 4 {
-        return ();
-    }
-    int[] octets = [];
-    foreach string part in parts {
-        if part.length() == 0 || part.length() > 3 {
-            return ();
-        }
-        int|error octet = int:fromString(part);
-        if octet is error || octet < 0 || octet > 255 {
-            return ();
-        }
-        octets.push(octet);
-    }
-    return octets;
 }
 
 # Splits a URL into its origin (`scheme://host[:port]`) and the resource path
@@ -486,6 +377,146 @@ isolated function handleParseResponseError(error chatResponseError) returns erro
         return error(string `${ERROR_MESSAGE}`, chatResponseError);
     }
     return chatResponseError;
+}
+
+// ── thought signatures ──────────────────────────────────────────────────────
+
+# Markers packed onto a tool-call id, carrying what `ai:FunctionCall` cannot.
+#
+# Gemini 3 returns a `thoughtSignature` covering a model turn and rejects a later request
+# that replays that turn's calls without it. Two things therefore have to survive the round
+# trip out through `ai:ChatAssistantMessage` and back into `chat`: the signature itself,
+# and — for parallel calls, where Gemini signs the first part of the turn — which calls
+# belong to that same turn. The two markers are kept independent rather than exclusive: a
+# signature that does arrive on a later part of a batch is carried rather than dropped.
+#
+# Neither fits in `ai:FunctionCall`: it is a closed record (`{name, arguments, id?}`), and
+# the agent runtime rebuilds it from persisted JSON, which would drop any extra field
+# anyway. The only value that survives both that path and `ai:Memory` is the call id, so
+# both travel appended to it and are split off before anything reaches the wire or a span.
+#
+# A connector-side cache was the alternative, and was rejected: tool-call turns are written
+# to `ai:Memory` and replayed on later runs, so a cache would lose the signature across a
+# restart, across service replicas, and whenever an identical call repeats — each of which
+# is the same 400 in a less obvious place.
+#
+# The markers cannot occur in a call id (short alphanumeric tokens) or a signature (base64),
+# so both can be appended to an id and split off again unambiguously. The signature marker
+# is appended last, since a signature is the only part that may itself run to the end.
+const THOUGHT_SIGNATURE_MARKER = "|thought-signature:";
+const BATCH_CONTINUATION_MARKER = "|thought-continuation";
+
+# A tool-call id as it travels through `ai:FunctionCall`.
+type ToolCallId record {|
+    # Gemini's own `functionCall.id`, or `()` when it sent none
+    string? id;
+    # The `thoughtSignature` Gemini returned on this call's part, or `()` when it sent none
+    string? signature;
+    # Whether this call continues the parallel batch opened by an earlier call, and so
+    # belongs in the same `contents` entry rather than one of its own
+    boolean continuesBatch;
+|};
+
+# Packs what Gemini needs back onto the id handed to the caller as `ai:FunctionCall.id`.
+#
+# + id - The `functionCall.id` Gemini returned, or `()` when it returned none
+# + signature - The `thoughtSignature` on this call's part, if any
+# + continuesBatch - Whether an earlier call in the same candidate opened this turn
+# + return - The composite id, or `()` when there is nothing to carry and no id
+isolated function packToolCallId(string? id, string? signature, boolean continuesBatch) returns string? {
+    boolean signed = signature is string && signature.length() > 0;
+    if !continuesBatch && !signed {
+        return id;
+    }
+    // Gemini signs the first call of a batch, so a signed continuation is not the shape it
+    // normally sends — but if one arrives, packing must not be what loses the signature.
+    string packed = id ?: "";
+    if continuesBatch {
+        packed += BATCH_CONTINUATION_MARKER;
+    }
+    if signed {
+        packed += string `${THOUGHT_SIGNATURE_MARKER}${<string>signature}`;
+    }
+    return packed;
+}
+
+# Splits a packed id back into Gemini's own id, the turn's signature, and whether the call
+# continues a parallel batch.
+#
+# Tolerates an unmarked id — one a caller assembled by hand, or persisted before this
+# connector packed anything — by returning it unchanged as a plain call id.
+#
+# + packed - The id from an `ai:FunctionCall`
+# + return - The decomposed id
+isolated function unpackToolCallId(string? packed) returns ToolCallId {
+    if packed is () {
+        return {id: (), signature: (), continuesBatch: false};
+    }
+    // Markers are stripped from the right, so a call carrying both is decomposed in full.
+    string remainder = packed;
+    string? signature = ();
+    int? signatureIdx = remainder.indexOf(THOUGHT_SIGNATURE_MARKER);
+    if signatureIdx is int {
+        string packedSignature = remainder.substring(signatureIdx + THOUGHT_SIGNATURE_MARKER.length());
+        signature = packedSignature.length() > 0 ? packedSignature : ();
+        remainder = remainder.substring(0, signatureIdx);
+    }
+    boolean continuesBatch = false;
+    int? continuationIdx = remainder.indexOf(BATCH_CONTINUATION_MARKER);
+    if continuationIdx is int {
+        continuesBatch = true;
+        remainder = remainder.substring(0, continuationIdx);
+    }
+    // An empty remainder means Gemini sent no id of its own and the id exists only to
+    // carry a marker; it must not be echoed back as `functionCall.id`.
+    return {id: remainder.length() > 0 ? remainder : (), signature, continuesBatch};
+}
+
+# Reports whether an assistant message is nothing but the continuation of a parallel
+# tool-call batch, and so must be folded back into the turn that opened it.
+#
+# + message - The assistant message to classify
+# + return - `true` when every tool call in it continues an earlier batch
+isolated function continuesToolCallBatch(ai:ChatAssistantMessage message) returns boolean {
+    ai:FunctionCall[]? toolCalls = message.toolCalls;
+    if toolCalls is () || toolCalls.length() == 0 {
+        return false;
+    }
+    foreach ai:FunctionCall toolCall in toolCalls {
+        if !unpackToolCallId(toolCall.id).continuesBatch {
+            return false;
+        }
+    }
+    return true;
+}
+
+# Returns the assistant message with any packed signature stripped from its tool-call ids.
+#
+# Signatures are multi-kilobyte opaque blobs; recorded verbatim they would dominate every
+# span carrying a tool call and bury the arguments that make a trace readable.
+#
+# + message - The assistant message about to be recorded
+# + return - An equivalent message carrying only Gemini's own call ids
+isolated function stripThoughtSignatures(ai:ChatAssistantMessage message) returns ai:ChatAssistantMessage {
+    ai:FunctionCall[]? toolCalls = message.toolCalls;
+    if toolCalls is () {
+        return message;
+    }
+    ai:FunctionCall[] stripped = [];
+    foreach ai:FunctionCall toolCall in toolCalls {
+        ai:FunctionCall call = {name: toolCall.name, arguments: toolCall.arguments};
+        string? id = unpackToolCallId(toolCall.id).id;
+        if id is string {
+            call.id = id;
+        }
+        stripped.push(call);
+    }
+    ai:ChatAssistantMessage result = {role: message.role, content: message.content, toolCalls: stripped};
+    string? name = message?.name;
+    if name is string {
+        result.name = name;
+    }
+    return result;
 }
 
 # Total tokens billed as output for a response.
@@ -692,12 +723,11 @@ isolated function extractTextFromCandidate(Candidate candidate) returns string? 
 # + temperature - The temperature for controlling randomness in the model's output; omitted
 #                 from the request when `()` so the model's own default applies
 # + maxTokens - The upper limit for the number of tokens in the generated response
-# + allowPrivateDocumentHosts - Allows document URLs to resolve to non-public addresses
 # + prompt - The prompt to send
 # + expectedResponseTypedesc - The caller's expected return type
 # + return - The generated value bound to the expected type, or an `ai:Error`
 isolated function generateLlmResponse(http:Client httpClient, string apiKey, GEMINI_MODEL_NAMES modelType,
-        decimal? temperature, int maxTokens, boolean allowPrivateDocumentHosts,
+        decimal? temperature, int maxTokens,
         ai:Prompt prompt, typedesc<json> expectedResponseTypedesc) returns anydata|ai:Error {
     observe:GenerateContentSpan span = observe:createGenerateContentSpan(modelType);
     span.addProvider("gemini");
@@ -705,7 +735,7 @@ isolated function generateLlmResponse(http:Client httpClient, string apiKey, GEM
     Part[] parts;
     ResponseSchema responseSchema;
     do {
-        parts = check generateChatCreationContent(prompt, allowPrivateDocumentHosts);
+        parts = check generateChatCreationContent(prompt);
         responseSchema = check getExpectedResponseSchema(expectedResponseTypedesc);
     } on fail ai:Error err {
         span.close(err);
