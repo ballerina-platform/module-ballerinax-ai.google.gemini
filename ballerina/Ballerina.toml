@@ -7,7 +7,7 @@ icon="icon.png"
 name = "ai.google.gemini"
 org = "ballerinax"
 repository = "https://github.com/ballerina-platform/module-ballerinax-ai.google.gemini"
-version = "0.9.0"
+version = "1.0.0"
 
 [platform.java21]
 graalvmCompatible = true
@@ -15,5 +15,5 @@ graalvmCompatible = true
 [[platform.java21.dependency]]
 groupId = "io.ballerina.lib"
 artifactId = "ai.google.gemini-native"
-version = "0.9.0"
-path = "../native/build/libs/ai.google.gemini-native-0.9.0-SNAPSHOT.jar"
+version = "1.0.0"
+path = "../native/build/libs/ai.google.gemini-native-1.0.0-SNAPSHOT.jar"
