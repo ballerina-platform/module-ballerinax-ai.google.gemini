@@ -600,6 +600,34 @@ isolated function mapHttpError(error err) returns ai:Error {
             : string `Gemini API request failed with status ${statusCode}`, err);
 }
 
+# Maps a non-2xx response to a streaming request onto the `ai:LlmError` taxonomy.
+#
+# The streaming call targets `http:Response` rather than a bound record, so the HTTP client
+# hands back 4xx/5xx as an ordinary response instead of raising an error — `mapHttpError`
+# never sees them. The status is therefore inspected directly and Gemini's
+# `{"error": {...}}` envelope read from the body, so a rejected key or invalid request
+# reports as itself instead of as an empty or unparseable event stream.
+#
+# + response - The non-2xx response
+# + return - A typed `ai:Error` describing the failure
+isolated function mapStreamErrorResponse(http:Response response) returns ai:Error {
+    json|error payload = response.getJsonPayload();
+    string detail = payload is json ? describeGeminiError(payload) : "";
+    // A gateway or proxy rejecting the request ahead of Gemini answers in HTML or plain
+    // text, not the JSON error envelope. Falling back to the raw body keeps the reason
+    // visible instead of reporting a bare status code.
+    if detail.length() == 0 {
+        string|error textPayload = response.getTextPayload();
+        if textPayload is string {
+            string trimmed = textPayload.trim();
+            detail = trimmed.length() > 200 ? trimmed.substring(0, 200) : trimmed;
+        }
+    }
+    return error ai:LlmError(detail.length() > 0
+            ? string `Gemini API streaming request failed with status ${response.statusCode}: ${detail}`
+            : string `Gemini API streaming request failed with status ${response.statusCode}`);
+}
+
 # Extracts `error.status` and `error.message` from Gemini's error envelope.
 #
 # + body - The response body carried by the HTTP error

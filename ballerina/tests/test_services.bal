@@ -27,7 +27,8 @@ const MOCK_THOUGHT_SIGNATURE = "CtIBAVSoXO9sig1234567890abcdefGHIJKLMNOP+/=";
 // layer unique to Gemini is covered.
 service /llm on new http:Listener(8080) {
     resource function post models/[string operation](@http:Payload json payload,
-            @http:Header {name: "x-goog-api-key"} string? apiKeyHeader = ())
+            @http:Header {name: "x-goog-api-key"} string? apiKeyHeader = (),
+            string? alt = ())
             returns json|http:Response|error {
         // Authentication must not silently break: every request, on every endpoint,
         // has to carry the API key in the documented header.
@@ -42,6 +43,17 @@ service /llm on new http:Listener(8080) {
         }
         if operation.endsWith(":batchEmbedContents") {
             return {embeddings: [{values: [0.1, 0.2]}, {values: [0.3, 0.4]}]};
+        }
+        // :streamGenerateContent — replies in Gemini's SSE framing. Handled before the
+        // `:generateContent` branch below, which would otherwise claim it by fall-through.
+        if operation.endsWith(":streamGenerateContent") {
+            // Without `alt=sse` Gemini replies with one incrementally-written JSON array
+            // instead of Server-Sent Events, and the connector's SSE parsing would have
+            // nothing to read. Nothing else in these tests would notice its loss.
+            test:assertEquals(alt, "sse", "':streamGenerateContent' must be requested with 'alt=sse'");
+            string streamPrompt = extractFirstText(payload);
+            validateStreamRequest(streamPrompt, payload);
+            return buildStreamResponse(streamPrompt);
         }
         // :generateContent — assert the request shape, then pick a response based
         // on the first text part.
@@ -136,6 +148,215 @@ service /llm on new http:Listener(8080) {
         response.setHeader("Location", string `/llm/assets/${name}`);
         return response;
     }
+}
+
+// The streaming body is built by the same `buildGenerateContentRequest` as `chat`, so it
+// must carry the same generation config and tool declarations. Asserting it here guards
+// that sharing: a streaming path that quietly stopped sending tools, or the token ceiling,
+// would otherwise still satisfy every chunk-mapping test.
+function validateStreamRequest(string promptText, json payload) {
+    map<json> obj = payload is map<json> ? payload : {};
+
+    json generationConfig = obj["generationConfig"];
+    test:assertTrue(generationConfig is map<json>, "a streaming request must carry a generationConfig");
+    test:assertEquals((<map<json>>generationConfig)["maxOutputTokens"], DEFAULT_MAX_TOKEN_COUNT,
+            "the token ceiling must apply to streamed generations too");
+    if promptText.startsWith("Stream thoughts") {
+        json thinkingConfig = (<map<json>>generationConfig)["thinkingConfig"];
+        test:assertEquals(thinkingConfig, {includeThoughts: true},
+                "chatAsStream must ask Gemini to return thought parts");
+    }
+
+    json contents = obj["contents"];
+    test:assertTrue(contents is json[], "a streaming request must carry a contents array");
+
+    if promptText.startsWith("Stream tool call") || promptText.startsWith("Stream parallel tools") {
+        json tools = obj["tools"];
+        test:assertTrue(tools is json[], "tool declarations must reach the streaming endpoint");
+        map<json> toolEntry = <map<json>>(<json[]>tools)[0];
+        test:assertTrue(toolEntry.hasKey("functionDeclarations"),
+                "tools must be sent as Gemini function declarations");
+    }
+}
+
+// Picks the streamed reply for a `:streamGenerateContent` request, keyed on the prompt.
+function buildStreamResponse(string promptText) returns http:Response {
+    if promptText.startsWith("Stream auth error") {
+        http:Response unauthorized = new;
+        unauthorized.statusCode = 401;
+        unauthorized.setJsonPayload({
+            'error: {code: 401, message: "API key not valid.", status: "UNAUTHENTICATED"}
+        });
+        return unauthorized;
+    }
+    // A turn ending in a function call. Gemini reports "STOP" rather than a tool-specific
+    // finish reason, and signs the part — both of which the mapping has to cope with.
+    if promptText.startsWith("Stream tool call") {
+        return buildSseResponse([
+            streamChunk([{text: "Looking that up. "}], ()),
+            {
+                responseId: STREAM_RESPONSE_ID,
+                modelVersion: STREAM_MODEL_VERSION,
+                candidates: [
+                    {
+                        content: {
+                            role: "model",
+                            parts: [
+                                {
+                                    functionCall: {id: "call-1", name: "getWeather", args: {city: "Colombo"}},
+                                    thoughtSignature: MOCK_THOUGHT_SIGNATURE
+                                }
+                            ]
+                        },
+                        finishReason: "STOP",
+                        index: 0
+                    }
+                ],
+                usageMetadata: STREAM_USAGE
+            }
+        ]);
+    }
+    // Same shape as "Stream tool call" — a content chunk, then a chunk that is tool-call
+    // and finish-reason only — but under a prompt prefix `validateStreamRequest` does not
+    // require tools for, since `generateAsStream` sends none. Exists so
+    // `generateAsStream`'s text-only projection can be exercised against a chunk stream
+    // that also carries a tool call, without tripping that assertion.
+    if promptText.startsWith("Generate stream tool call") {
+        return buildSseResponse([
+            streamChunk([{text: "Looking that up. "}], ()),
+            {
+                candidates: [
+                    {
+                        content: {
+                            role: "model",
+                            parts: [{functionCall: {id: "call-1", name: "getWeather", args: {city: "Colombo"}}}]
+                        },
+                        finishReason: "STOP",
+                        index: 0
+                    }
+                ]
+            }
+        ]);
+    }
+    // Two calls in one streamed turn, signed once on the first — the parallel-batch shape.
+    if promptText.startsWith("Stream parallel tools") {
+        return buildSseResponse([
+            {
+                responseId: STREAM_RESPONSE_ID,
+                modelVersion: STREAM_MODEL_VERSION,
+                candidates: [
+                    {
+                        content: {
+                            role: "model",
+                            parts: [
+                                {
+                                    functionCall: {id: "call-1", name: "getWeather", args: {city: "Colombo"}},
+                                    thoughtSignature: MOCK_THOUGHT_SIGNATURE
+                                },
+                                {functionCall: {id: "call-2", name: "getStockPrice", args: {symbol: "BAL"}}}
+                            ]
+                        },
+                        finishReason: "STOP",
+                        index: 0
+                    }
+                ]
+            }
+        ]);
+    }
+    // Chain-of-thought parts, which must not be folded into the answer text.
+    if promptText.startsWith("Stream thoughts") {
+        return buildSseResponse([
+            streamChunk([{text: "weighing options", thought: true}], ()),
+            streamChunk([{text: "The answer is 42."}], "STOP")
+        ]);
+    }
+    if promptText.startsWith("Stream truncated") {
+        return buildSseResponse([streamChunk([{text: "Half a sen"}], "MAX_TOKENS")]);
+    }
+    // A safety block: Gemini closes the turn with a candidate that has no `parts` key at
+    // all, not an empty one. The chunk still carries the finish reason and the usage, so it
+    // must survive conversion rather than being dropped as unparseable.
+    if promptText.startsWith("Stream filtered") {
+        return buildSseResponse([
+            {
+                responseId: STREAM_RESPONSE_ID,
+                modelVersion: STREAM_MODEL_VERSION,
+                candidates: [{content: {role: "model"}, finishReason: "SAFETY", index: 0}],
+                usageMetadata: STREAM_USAGE
+            }
+        ]);
+    }
+    // A failure Gemini reports mid-stream, after a 2xx status line and some answer text.
+    if promptText.startsWith("Stream mid error") {
+        return buildRawSseResponse([
+            streamChunk([{text: "Half an ans"}], ()).toJsonString(),
+            "{\"error\": {\"code\": 503, \"message\": \"The model is overloaded.\", " +
+                "\"status\": \"UNAVAILABLE\"}}"
+        ]);
+    }
+    // A prompt rejected by the safety filters: no candidates at all, only the block reason.
+    if promptText.startsWith("Stream blocked prompt") {
+        return buildRawSseResponse([
+            {responseId: STREAM_RESPONSE_ID, promptFeedback: {blockReason: "SAFETY"}}.toJsonString()
+        ]);
+    }
+    // A frame that is not JSON at all — a truncated or corrupted event.
+    if promptText.startsWith("Stream malformed chunk") {
+        return buildRawSseResponse([
+            streamChunk([{text: "Half an ans"}], ()).toJsonString(),
+            "{\"candidates\": [{\"content\""
+        ]);
+    }
+    // Default: plain text delivered in fragments, usage only on the closing chunk.
+    return buildSseResponse([
+        streamChunk([{text: "Hello"}], ()),
+        streamChunk([{text: ", world"}], ()),
+        streamChunk([{text: "!"}], "STOP")
+    ]);
+}
+
+const STREAM_RESPONSE_ID = "resp-stream-1";
+const STREAM_MODEL_VERSION = "gemini-3.6-flash-001";
+final readonly & json STREAM_USAGE = {
+    promptTokenCount: 11,
+    candidatesTokenCount: 5,
+    thoughtsTokenCount: 3,
+    totalTokenCount: 19
+};
+
+// Builds one streamed chunk carrying the given parts, attaching usage alongside the
+// finish reason so the mock mirrors Gemini's own final-chunk accounting.
+function streamChunk(json[] parts, string? finishReason) returns json {
+    map<json> candidate = {content: {role: "model", parts}, index: 0};
+    map<json> chunk = {responseId: STREAM_RESPONSE_ID, modelVersion: STREAM_MODEL_VERSION};
+    if finishReason is string {
+        candidate["finishReason"] = finishReason;
+        chunk["usageMetadata"] = STREAM_USAGE;
+    }
+    chunk["candidates"] = [candidate];
+    return chunk;
+}
+
+// Frames chunks the way `:streamGenerateContent?alt=sse` does: one `data:` event each,
+// and no terminating sentinel — the stream simply ends.
+function buildSseResponse(json[] chunks) returns http:Response {
+    string[] frames = [];
+    foreach json chunk in chunks {
+        frames.push(chunk.toJsonString());
+    }
+    return buildRawSseResponse(frames);
+}
+
+// Frames already-serialized payloads, so a scenario can send a body that is deliberately
+// not valid JSON — something the `json` type cannot represent.
+function buildRawSseResponse(string[] frames) returns http:Response {
+    string body = "";
+    foreach string frame in frames {
+        body += string `data: ${frame}${"\n\n"}`;
+    }
+    http:Response response = new;
+    response.setTextPayload(body, "text/event-stream");
+    return response;
 }
 
 // Asserts the shape of a `:generateContent` request for the scenarios that
