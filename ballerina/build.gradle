@@ -111,6 +111,7 @@ clean {
 }
 
 build.dependsOn ':ai.google.gemini-native:build'
+test.dependsOn ':ai.google.gemini-native:build'
 build.dependsOn ":ai.google.gemini-compiler-plugin:build"
 build.dependsOn "generatePomFileForMavenPublication"
 publishToMavenLocal.dependsOn build
