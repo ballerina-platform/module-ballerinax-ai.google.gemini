@@ -9,6 +9,7 @@ The `ai.google.gemini` connector plugs Gemini into the Ballerina [`ai`](https://
 - Connect and interact with Gemini large language models
 - Native tool/function calling
 - Structured output via Gemini's native JSON mode (`responseJsonSchema`)
+- Streaming responses through `chatAsStream` and `generateAsStream`
 - Multimodal input — images, PDFs, and Gemini File API references, through `generate`
 - Text and embedding model support (`embed` / `batchEmbed`)
 - Secure communication using API-key authentication
@@ -16,7 +17,8 @@ The `ai.google.gemini` connector plugs Gemini into the Ballerina [`ai`](https://
 ### Scope and limitations
 
 - **`chat` accepts text only.** Images, PDFs, and other documents are supported through `generate` (see [Multimodal input](#multimodal-input)); passing a non-text `ai:Document` to `chat` returns an error.
-- **Streaming is not available.** The `ai:ModelProvider` interface defines only `chat` and `generate`, so there is no streaming API to implement.
+- **`generateAsStream` streams text only.** Structured types have no valid intermediate state, so `generateAsStream` always yields `string` fragments — use `generate` for structured output. Its prompt is built the same way `generate`'s is, so it may carry images, PDFs, and `ai:FileId` insertions, same as `generate`.
+- **Streamed finish reasons are lossy.** `ai:FinishReason` carries only the four OpenAI values, so Gemini's safety and operational reasons (`SAFETY`, `RECITATION`, `PROHIBITED_CONTENT`, `MALFORMED_FUNCTION_CALL`, and the rest) all normalize to `content_filter`. The specific reason is not recoverable from the normalized chunk.
 - **Gemini Developer API only.** Vertex AI endpoints (`{location}-aiplatform.googleapis.com`, OAuth bearer credentials, `publishers/google/models/...` paths) are not supported.
 - **Document URLs are fetched by the connector.** Gemini cannot fetch arbitrary web URLs, so an `ai:Url` in a prompt is downloaded locally and sent inline. Only `http` and `https` are accepted, including on every redirect hop. No restriction is placed on the destination host: a URL that resolves to a loopback, private, link-local, or other internal address (including cloud metadata endpoints) is fetched the same as any public one. Applications that accept document URLs from untrusted end users are responsible for validating or restricting those URLs before passing them to this connector, or for enforcing an egress policy at the network layer.
 
@@ -59,6 +61,48 @@ public function main() returns error? {
     io:println(response.content);
 }
 ```
+
+### Streaming a response
+
+`chatAsStream` streams normalized `ai:ChatMessageChunk` values — text fragments, tool calls, reasoning, and a final chunk carrying the finish reason. `role` is set to `ai:ASSISTANT` on every chunk:
+
+```ballerina
+import ballerina/ai;
+import ballerina/io;
+import ballerinax/ai.google.gemini;
+
+public function main() returns error? {
+    stream<ai:ChatMessageChunk, ai:Error?> chunks =
+        check geminiModel->chatAsStream([{role: ai:USER, content: "Explain Ballerina."}]);
+    while true {
+        record {|ai:ChatMessageChunk value;|}|ai:Error? next = chunks.next();
+        if next is () {
+            break;
+        }
+        if next is ai:Error {
+            return next;
+        }
+        string? content = next.value.content;
+        if content is string {
+            io:print(content);
+        }
+    }
+}
+```
+
+`generateAsStream` is the simpler form when only the answer text is wanted:
+
+```ballerina
+public function main() returns error? {
+    stream<string, ai:Error?> answer = check geminiModel->generateAsStream(`Explain Ballerina.`);
+    check from string fragment in answer
+        do {
+            io:print(fragment);
+        };
+}
+```
+
+> **Note:** a query expression such as the one above reports a failed stream by propagating the error's *cause* rather than the `ai:Error` itself. Iterate with `next()`, as in the `chatAsStream` example, when the error type matters.
 
 ### Using the Embedding Provider
 
