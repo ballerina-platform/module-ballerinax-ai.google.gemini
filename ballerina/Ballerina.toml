@@ -16,4 +16,4 @@ graalvmCompatible = true
 groupId = "io.ballerina.lib"
 artifactId = "ai.google.gemini-native"
 version = "1.0.0"
-path = "../native/build/libs/ai.google.gemini-native-1.0.0-SNAPSHOT.jar"
+path = "../native/build/libs/ai.google.gemini-native-1.0.0.jar"
