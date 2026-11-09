@@ -495,6 +495,27 @@ function testGenerateForwardsGenerationConfig() returns ai:Error? {
 }
 
 @test:Config
+function testTemperatureWarningOnDeprecatedModels() {
+    // Google deprecates temperature on these models in favour of thinkingLevel.
+    GEMINI_MODEL_NAMES[] models = [GEMINI_4_ARGON, GEMINI_3_8_FLASH];
+    foreach GEMINI_MODEL_NAMES model in models {
+        string? warning = temperatureWarning(model, 0.5);
+        test:assertTrue(warning is string, string `expected a temperature warning for ${model}`);
+        test:assertTrue((<string>warning).includes(model), "the warning must name the model");
+        test:assertTrue((<string>warning).includes("thinkingLevel"), "the warning must point to thinkingLevel");
+    }
+}
+
+@test:Config
+function testNoTemperatureWarningWhenNotApplicable() {
+    // No warning when temperature is unset, or on models that still support it.
+    test:assertEquals(temperatureWarning(GEMINI_4_ARGON, ()), ());
+    test:assertEquals(temperatureWarning(GEMINI_3_8_FLASH, ()), ());
+    test:assertEquals(temperatureWarning(GEMINI_3_6_FLASH, 0.5), ());
+    test:assertEquals(temperatureWarning(GEMINI_3_1_PRO_PREVIEW, 0.5), ());
+}
+
+@test:Config
 function testChatForwardsThinkingLevel() returns ai:Error? {
     // The mock asserts thinkingConfig.thinkingLevel and temperature are present.
     ai:ChatAssistantMessage result = check tunedProvider->chat([{role: ai:USER, content: "Thinking config check"}]);

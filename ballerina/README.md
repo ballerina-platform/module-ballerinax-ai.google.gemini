@@ -140,7 +140,7 @@ Gemini's `minimal` level is not offered, because `GEMINI_3_8_FLASH`, `GEMINI_4_A
 
 `temperature` is **unset by default**, so the model's own default applies. Google [strongly recommends](https://ai.google.dev/gemini-api/docs/gemini-3) leaving it at the default of `1.0` for Gemini 3 models — lowering it "may lead to unexpected behavior, such as looping or degraded performance, particularly in complex mathematical or reasoning tasks."
 
-On `GEMINI_3_8_FLASH` and `GEMINI_4_ARGON`, Google deprecates `temperature` in favour of `thinkingLevel`. Both models still accept a value in the valid range of `0.0`–`2.0`, so setting it does not cause an error, but use `thinkingLevel` to tune these models.
+On `GEMINI_3_8_FLASH` and `GEMINI_4_ARGON`, Google deprecates `temperature` in favour of `thinkingLevel`. Both models still accept a value in the valid range of `0.0`–`2.0`, so setting it does not cause an error, but the connector logs a warning when the provider is created with a `temperature` for either model. Use `thinkingLevel` to tune these models.
 
 ### Schemas
 

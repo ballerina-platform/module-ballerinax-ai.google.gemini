@@ -18,6 +18,7 @@ import ballerina/ai;
 import ballerina/ai.observe;
 import ballerina/http;
 import ballerina/jballerina.java;
+import ballerina/log;
 
 const DEFAULT_GEMINI_SERVICE_URL = "https://generativelanguage.googleapis.com/v1beta";
 # Upper bound on tokens generated per request.
@@ -49,6 +50,23 @@ const GEMINI_ROLE_MODEL = "model";
 # describe mutually exclusive alternatives, which `anyOf` also satisfies.
 # Reference: https://blog.google/innovation-and-ai/technology/developers-tools/gemini-api-structured-outputs/
 final string[] & readonly NORMALIZED_SCHEMA_COMBINATORS = ["oneOf", "allOf"];
+
+# Models on which Google deprecates `temperature` in favour of `thinkingLevel`. They still
+# accept a value in the valid range without error, so the connector forwards it but warns.
+final GEMINI_MODEL_NAMES[] & readonly TEMPERATURE_DEPRECATED_MODELS = [GEMINI_4_ARGON, GEMINI_3_8_FLASH];
+
+# Returns the warning to log when `temperature` is set on a model that deprecates it.
+#
+# + modelType - The configured model
+# + temperature - The configured temperature, or `()` when unset
+# + return - The warning message, or `()` when no warning applies
+isolated function temperatureWarning(GEMINI_MODEL_NAMES modelType, decimal? temperature) returns string? {
+    if temperature is () || TEMPERATURE_DEPRECATED_MODELS.indexOf(modelType) is () {
+        return ();
+    }
+    return string `temperature is deprecated for model ${modelType} and may be ignored; ` +
+        "use thinkingLevel to tune this model instead";
+}
 
 # ModelProvider is a client class that provides an interface for interacting with Gemini Large Language Models.
 public isolated distinct client class ModelProvider {
@@ -99,6 +117,11 @@ public isolated distinct client class ModelProvider {
         self.temperature = temperature;
         self.maxTokens = maxTokens;
         self.thinkingLevel = thinkingLevel;
+        // Warn once at construction rather than on every request.
+        string? warning = temperatureWarning(modelType, temperature);
+        if warning is string {
+            log:printWarn(warning);
+        }
     }
 
     # Sends a chat request to the Gemini model with the given messages and tools.
