@@ -22,9 +22,9 @@ import ballerina/jballerina.java;
 const DEFAULT_GEMINI_SERVICE_URL = "https://generativelanguage.googleapis.com/v1beta";
 # Upper bound on tokens generated per request.
 #
-# Set to the Gemini 2.5+ maximum output limit (65,536) rather than a small value,
+# Set to the Gemini 3 maximum output limit (65,536) rather than a small value,
 # because thinking tokens are billed against `maxOutputTokens` on every model this
-# connector targets. Gemini 2.5 Flash alone may spend up to 24,576 tokens on internal
+# connector targets. Thinking models may spend tens of thousands of tokens on internal
 # reasoning, so a low cap can be consumed entirely by thinking, returning a candidate
 # with `finishReason` "MAX_TOKENS" and no text part. This is a ceiling, not a target —
 # billing follows the tokens actually produced.
@@ -60,6 +60,8 @@ public isolated distinct client class ModelProvider {
     private final GEMINI_MODEL_NAMES modelType;
     private final decimal? temperature;
     private final int maxTokens;
+    // Read by the native `Generator` shim via field lookup; see `Generator.java`.
+    private final THINKING_LEVEL? thinkingLevel;
 
     # Initializes the Gemini model with the given connection configuration and model configuration.
     #
@@ -71,7 +73,10 @@ public isolated distinct client class ModelProvider {
     #                 unset when `()`, so the model's own default applies. Google strongly
     #                 recommends leaving this unset for Gemini 3 models: values below the
     #                 default of `1.0` may cause looping or degraded performance on complex
-    #                 reasoning tasks
+    #                 reasoning tasks. Deprecated on `GEMINI_3_8_FLASH` and `GEMINI_4_ARGON`,
+    #                 which accept it but are tuned through `thinkingLevel` instead
+    # + thinkingLevel - How much internal reasoning the model performs before answering.
+    #                   Left unset when `()`, so the model's own default applies
     # + connectionConfig - Additional HTTP connection configuration
     # + return - `()` on successful initialization; otherwise, returns an `ai:Error`
     public isolated function init(@display {label: "API Key"} string apiKey,
@@ -79,6 +84,7 @@ public isolated distinct client class ModelProvider {
             @display {label: "Service URL"} string serviceUrl = DEFAULT_GEMINI_SERVICE_URL,
             @display {label: "Maximum Tokens"} int maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
+            @display {label: "Thinking Level"} THINKING_LEVEL? thinkingLevel = (),
             @display {label: "Connection Configuration"} *ConnectionConfig connectionConfig) returns ai:Error? {
         // `ConnectionConfig` is a field-compatible subset of `http:ClientConfiguration`
         // (it omits `auth` because Gemini authenticates via the `x-goog-api-key`
@@ -92,6 +98,7 @@ public isolated distinct client class ModelProvider {
         self.modelType = modelType;
         self.temperature = temperature;
         self.maxTokens = maxTokens;
+        self.thinkingLevel = thinkingLevel;
     }
 
     # Sends a chat request to the Gemini model with the given messages and tools.
@@ -223,6 +230,10 @@ public isolated distinct client class ModelProvider {
         decimal? temperature = self.temperature;
         if temperature is decimal {
             generationConfig.temperature = temperature;
+        }
+        THINKING_LEVEL? thinkingLevel = self.thinkingLevel;
+        if thinkingLevel is THINKING_LEVEL {
+            generationConfig.thinkingConfig = {thinkingLevel};
         }
         if stop is string {
             generationConfig.stopSequences = [stop];

@@ -43,7 +43,7 @@ import ballerinax/ai.google.gemini;
 import ballerina/ai;
 import ballerinax/ai.google.gemini;
 
-final ai:ModelProvider geminiModel = check new gemini:ModelProvider("<API_KEY>", gemini:GEMINI_3_6_FLASH);
+final ai:ModelProvider geminiModel = check new gemini:ModelProvider("<API_KEY>", gemini:GEMINI_3_8_FLASH);
 ```
 
 ### Step 3: Invoke the model
@@ -98,7 +98,17 @@ To avoid the download entirely, upload via the Gemini File API and pass the resu
 
 ## Model selection
 
-`GEMINI_3_6_FLASH` is the recommended default. The `GEMINI_MODEL_NAMES` enum documents the status of every supported model, including announced shutdown dates — `GEMINI_3_1_FLASH_LITE` retires on 2027-05-07 and the `gemini-2.5` line on 2026-10-16. The `gemini-2.5` models are also closed to new API keys: a key that has not used them before is refused with 404 "This model ... is no longer available to new users", so do not pick them for a new integration.
+`GEMINI_3_8_FLASH` is the recommended default. The `GEMINI_MODEL_NAMES` enum documents the status of every supported model, including announced shutdown dates — `GEMINI_3_1_FLASH_LITE` retires on 2027-05-07.
+
+`GEMINI_4_ARGON` is Google's flagship reasoning model. It is available on the paid tier only (the free tier has no quota for it, and calls fail with a 429), and it is noticeably slower than the Flash models. The default HTTP `timeout` is 60 seconds, so raise it for non-trivial prompts:
+
+```ballerina
+final ai:ModelProvider argon = check new gemini:ModelProvider(
+    "<API_KEY>",
+    gemini:GEMINI_4_ARGON,
+    timeout = 300
+);
+```
 
 For embeddings, `GEMINI_EMBEDDING_2` is the current model. `GEMINI_EMBEDDING_001` remains supported for text-only use cases.
 
@@ -108,13 +118,29 @@ For embeddings, `GEMINI_EMBEDDING_2` is the current model. `GEMINI_EMBEDDING_001
 
 ### Thinking tokens and `maxTokens`
 
-Gemini 2.5 models and later perform internal reasoning by default, and **reasoning tokens are billed against `maxOutputTokens`**. A small token cap can therefore be consumed entirely by reasoning, returning a response with `finishReason` `MAX_TOKENS` and no text at all.
+Gemini 3 models and later perform internal reasoning by default, and **reasoning tokens are billed against `maxOutputTokens`**. A small token cap can therefore be consumed entirely by reasoning, returning a response with `finishReason` `MAX_TOKENS` and no text at all.
 
 `maxTokens` defaults to 65,536 — the models' own maximum output limit — so this does not happen out of the box. It is a ceiling, not a target: billing follows the tokens actually produced.
+
+### Thinking level
+
+`thinkingLevel` sets how much internal reasoning the model performs before answering: `gemini:LOW`, `gemini:MEDIUM` or `gemini:HIGH`. It is **unset by default**, so the model's own default (`MEDIUM` on current models) applies. Higher levels can improve answers on complex tasks at the cost of latency and billed thinking tokens.
+
+```ballerina
+final ai:ModelProvider geminiModel = check new gemini:ModelProvider(
+    "<API_KEY>",
+    gemini:GEMINI_3_8_FLASH,
+    thinkingLevel = gemini:LOW
+);
+```
+
+Gemini's `minimal` level is not offered, because `GEMINI_3_8_FLASH`, `GEMINI_4_ARGON` and `GEMINI_3_1_PRO_PREVIEW` reject it.
 
 ### Temperature
 
 `temperature` is **unset by default**, so the model's own default applies. Google [strongly recommends](https://ai.google.dev/gemini-api/docs/gemini-3) leaving it at the default of `1.0` for Gemini 3 models — lowering it "may lead to unexpected behavior, such as looping or degraded performance, particularly in complex mathematical or reasoning tasks."
+
+On `GEMINI_3_8_FLASH` and `GEMINI_4_ARGON`, Google deprecates `temperature` in favour of `thinkingLevel`. Both models still accept a value in the valid range of `0.0`–`2.0`, so setting it does not cause an error, but use `thinkingLevel` to tune these models.
 
 ### Schemas
 
@@ -135,7 +161,7 @@ No retry policy is applied by default, because `generateContent` is a billed, no
 ```ballerina
 final ai:ModelProvider geminiModel = check new gemini:ModelProvider(
     "<API_KEY>",
-    gemini:GEMINI_3_6_FLASH,
+    gemini:GEMINI_3_8_FLASH,
     retryConfig = {count: 3, interval: 2, statusCodes: [429, 503]}
 );
 ```

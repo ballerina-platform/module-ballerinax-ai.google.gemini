@@ -26,7 +26,10 @@ const PDF_URL = "http://localhost:8080/llm/assets/sample.pdf";
 // 302s to IMAGE_URL, for the manual redirect loop.
 const REDIRECT_IMAGE_URL = "http://localhost:8080/llm/redirect/sample.png";
 
-final ModelProvider provider = check new (API_KEY, GEMINI_3_6_FLASH, SERVICE_URL);
+final ModelProvider provider = check new (API_KEY, GEMINI_3_8_FLASH, SERVICE_URL);
+// Sets the optional generation settings, so the mock can assert they are forwarded.
+final ModelProvider tunedProvider = check new (API_KEY, GEMINI_4_ARGON, SERVICE_URL,
+        temperature = 0.5, thinkingLevel = HIGH);
 final EmbeddingProvider embeddingProvider = check new (API_KEY, GEMINI_EMBEDDING_2, SERVICE_URL);
 
 // ── chat ───────────────────────────────────────────────────────────────────
@@ -488,6 +491,20 @@ function testGenerateMapReturnTypeIsUnsupported() returns ai:Error? {
 function testGenerateForwardsGenerationConfig() returns ai:Error? {
     // The mock asserts temperature/maxOutputTokens/responseMimeType are present.
     int result = check provider->generate(`Config check: rate this out of 10`);
+    test:assertEquals(result, 5);
+}
+
+@test:Config
+function testChatForwardsThinkingLevel() returns ai:Error? {
+    // The mock asserts thinkingConfig.thinkingLevel and temperature are present.
+    ai:ChatAssistantMessage result = check tunedProvider->chat([{role: ai:USER, content: "Thinking config check"}]);
+    test:assertEquals(result.content, "Thought it through.");
+}
+
+@test:Config
+function testGenerateForwardsThinkingLevel() returns ai:Error? {
+    // Exercises the native `Generator` shim, which must pass `thinkingLevel` through.
+    int result = check tunedProvider->generate(`Thinking config check: rate this out of 10`);
     test:assertEquals(result, 5);
 }
 

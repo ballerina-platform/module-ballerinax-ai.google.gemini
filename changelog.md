@@ -15,3 +15,9 @@ This file documents all significant changes made to the Ballerina `ai.google.gem
     which the API requires when a model turn is replayed in the conversation history.
   - Multimodal input through `generate` — images, PDFs, and Gemini File API references.
   - API-key authentication via the `x-goog-api-key` header.
+- `GEMINI_4_ARGON` and `GEMINI_3_8_FLASH` models. `GEMINI_3_8_FLASH` is now the recommended default.
+- Optional `thinkingLevel` (`LOW`, `MEDIUM`, `HIGH`) on `ModelProvider`, sent as
+  `generationConfig.thinkingConfig.thinkingLevel` from both `chat` and `generate`.
+
+### Removed
+- The retired `GEMINI_2_5_PRO`, `GEMINI_2_5_FLASH` and `GEMINI_2_5_FLASH_LITE` models.
