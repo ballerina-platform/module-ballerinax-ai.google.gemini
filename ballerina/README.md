@@ -2,7 +2,7 @@
 
 [Google Gemini](https://ai.google.dev/) is a family of multimodal large language models that support text generation, reasoning, function calling, and embeddings.
 
-The `ai.google.gemini` connector plugs Gemini into the Ballerina [`ai`](https://central.ballerina.io/ballerina/ai) agent framework. It implements the framework's `ModelProvider` and `EmbeddingProvider` interfaces, so any agent built on `ballerina/ai` can use Gemini for chat, structured generation, and embeddings.
+The `ai.google.gemini` connector plugs Gemini into the [`ai`](https://central.ballerina.io/ballerina/ai) agent framework. It implements the framework's `ModelProvider` and `EmbeddingProvider` interfaces, so any agent built with the `ai` module can use Gemini for chat, structured generation, and embeddings.
 
 ### Key features
 
