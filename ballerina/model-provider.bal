@@ -64,7 +64,7 @@ isolated function temperatureWarning(GEMINI_MODEL_NAMES modelType, decimal? temp
     if temperature is () || TEMPERATURE_DEPRECATED_MODELS.indexOf(modelType) is () {
         return ();
     }
-    return string `temperature is deprecated for model ${modelType} and may be ignored; ` +
+    return string `temperature is deprecated for model ${modelType}; ` +
         "use thinkingLevel to tune this model instead";
 }
 

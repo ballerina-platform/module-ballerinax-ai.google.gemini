@@ -85,15 +85,15 @@ public type ConnectionConfig record {|
 # intentionally excluded.
 @display {label: "Gemini Model Names"}
 public enum GEMINI_MODEL_NAMES {
+    # Generally available since 2026-09-02. The current flagship Flash model and the
+    # recommended default for new integrations. `temperature` is deprecated on this
+    # model; tune it with `thinkingLevel` instead.
+    GEMINI_3_8_FLASH = "gemini-3.8-flash",
     # Google's flagship reasoning model. Paid tier only: the free tier has no quota for
     # it. Noticeably slower than the Flash models, so raise the `timeout` connection
     # setting above its 60-second default for non-trivial prompts. `temperature` is
     # deprecated on this model; tune it with `thinkingLevel` instead.
     GEMINI_4_ARGON = "gemini-4-argon",
-    # Generally available since 2026-09-02. The current flagship Flash model and the
-    # recommended default for new integrations. `temperature` is deprecated on this
-    # model; tune it with `thinkingLevel` instead.
-    GEMINI_3_8_FLASH = "gemini-3.8-flash",
     # Generally available since 2026-07-21. Superseded by `GEMINI_3_8_FLASH`.
     GEMINI_3_6_FLASH = "gemini-3.6-flash",
     # Generally available since 2026-05-19. Requests to this model are currently
@@ -109,7 +109,28 @@ public enum GEMINI_MODEL_NAMES {
     GEMINI_3_1_PRO_PREVIEW = "gemini-3.1-pro-preview",
     # Preview model, available since 2025-12-17. Superseded by `GEMINI_3_8_FLASH`,
     # though no shutdown date has been announced.
-    GEMINI_3_FLASH_PREVIEW = "gemini-3-flash-preview"
+    GEMINI_3_FLASH_PREVIEW = "gemini-3-flash-preview",
+    # Retired by Google on 2026-10-16; requests to this model fail.
+    #
+    # # Deprecated
+    # The model is retired. Use `GEMINI_3_1_PRO_PREVIEW` instead. This member will be
+    # removed in the next major release.
+    @deprecated
+    GEMINI_2_5_PRO = "gemini-2.5-pro",
+    # Retired by Google on 2026-10-16; requests to this model fail.
+    #
+    # # Deprecated
+    # The model is retired. Use `GEMINI_3_8_FLASH` instead. This member will be removed
+    # in the next major release.
+    @deprecated
+    GEMINI_2_5_FLASH = "gemini-2.5-flash",
+    # Retired by Google on 2026-10-16; requests to this model fail.
+    #
+    # # Deprecated
+    # The model is retired. Use `GEMINI_3_5_FLASH_LITE` instead. This member will be
+    # removed in the next major release.
+    @deprecated
+    GEMINI_2_5_FLASH_LITE = "gemini-2.5-flash-lite"
 }
 
 # How much internal reasoning a Gemini model performs before answering. Higher levels
@@ -239,8 +260,8 @@ type FunctionDeclaration record {|
     # Function parameters described with Gemini's OpenAPI 3.0 schema subset. Mutually
     # exclusive with `parametersJsonSchema`.
     map<json> parameters?;
-    # Function parameters described with standard JSON Schema. Supported on Gemini 2.5
-    # models and later, and accepts keywords the `parameters` subset rejects, including
+    # Function parameters described with standard JSON Schema, which every supported
+    # model accepts. Allows keywords the `parameters` subset rejects, including
     # `$ref`, `$defs`, `additionalProperties`, and `prefixItems`. Mutually exclusive
     # with `parameters`.
     map<json> parametersJsonSchema?;
@@ -289,8 +310,8 @@ type GenerationConfig record {|
     # `responseMimeType` = "application/json"). Mutually exclusive with
     # `responseJsonSchema`.
     map<json> responseSchema?;
-    # Structured-response schema in standard JSON Schema. Supported on Gemini 2.5 models
-    # and later, and accepts keywords the `responseSchema` subset rejects, including
+    # Structured-response schema in standard JSON Schema, which every supported model
+    # accepts. Allows keywords the `responseSchema` subset rejects, including
     # `$ref`, `$defs`, `additionalProperties`, and `prefixItems`. `responseMimeType` is
     # still required. Mutually exclusive with `responseSchema` — Gemini rejects requests
     # that set both.

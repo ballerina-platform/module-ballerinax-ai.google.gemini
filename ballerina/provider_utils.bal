@@ -745,7 +745,7 @@ isolated function generateLlmResponse(http:Client httpClient, string apiKey, GEM
     }
 
     // Structured output is requested through `responseJsonSchema`, which accepts
-    // standard JSON Schema on Gemini 2.5 models and later — including `$ref`/`$defs`,
+    // standard JSON Schema on all supported models — including `$ref`/`$defs`,
     // `additionalProperties`, `title` and `prefixItems`. Only `oneOf`/`allOf` are
     // rewritten (to the documented `anyOf`). `responseSchema` must be left unset:
     // Gemini rejects a request that carries both. Note a top-level `map<T>` return type

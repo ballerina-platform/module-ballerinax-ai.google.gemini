@@ -100,6 +100,8 @@ To avoid the download entirely, upload via the Gemini File API and pass the resu
 
 `GEMINI_3_8_FLASH` is the recommended default. The `GEMINI_MODEL_NAMES` enum documents the status of every supported model, including announced shutdown dates — `GEMINI_3_1_FLASH_LITE` retires on 2027-05-07.
 
+`GEMINI_2_5_PRO`, `GEMINI_2_5_FLASH` and `GEMINI_2_5_FLASH_LITE` are deprecated. Google retired these models on 2026-10-16, so requests to them fail. They will be removed in the next major release.
+
 `GEMINI_4_ARGON` is Google's flagship reasoning model. It is available on the paid tier only (the free tier has no quota for it, and calls fail with a 429), and it is noticeably slower than the Flash models. The default HTTP `timeout` is 60 seconds, so raise it for non-trivial prompts:
 
 ```ballerina
