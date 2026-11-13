@@ -83,16 +83,21 @@ public type ConnectionConfig record {|
 # `/v1beta/models` listing for your API version; newer deployments may add models not
 # listed here. Non-text models (TTS/audio, image/video generation, embeddings) are
 # intentionally excluded.
-#
-# The `gemini-2.5-*` line is retained for keys that already use it, but is closed to new
-# ones: a call from a key that has not used those models before is refused with 404 "This
-# model ... is no longer available to new users". Do not choose it for a new integration.
 @display {label: "Gemini Model Names"}
 public enum GEMINI_MODEL_NAMES {
-    # Generally available since 2026-07-21. The current flagship Flash model and the
-    # recommended default for new integrations.
+    # Generally available since 2026-09-02. The current flagship Flash model and the
+    # recommended default for new integrations. `temperature` is deprecated on this
+    # model; tune it with `thinkingLevel` instead.
+    GEMINI_3_8_FLASH = "gemini-3.8-flash",
+    # Google's flagship reasoning model. Paid tier only: the free tier has no quota for
+    # it. Noticeably slower than the Flash models, so raise the `timeout` connection
+    # setting above its 60-second default for non-trivial prompts. `temperature` is
+    # deprecated on this model; tune it with `thinkingLevel` instead.
+    GEMINI_4_ARGON = "gemini-4-argon",
+    # Generally available since 2026-07-21. Superseded by `GEMINI_3_8_FLASH`.
     GEMINI_3_6_FLASH = "gemini-3.6-flash",
-    # Generally available since 2026-05-19.
+    # Generally available since 2026-05-19. Requests to this model are currently
+    # served by `gemini-3.6-flash` (the response's model version reports it).
     GEMINI_3_5_FLASH = "gemini-3.5-flash",
     # Generally available since 2026-07-21. The recommended low-cost tier.
     GEMINI_3_5_FLASH_LITE = "gemini-3.5-flash-lite",
@@ -102,18 +107,46 @@ public enum GEMINI_MODEL_NAMES {
     # Preview model, available since 2026-02-19. Preview models may change or be
     # withdrawn at short notice; avoid depending on them in production.
     GEMINI_3_1_PRO_PREVIEW = "gemini-3.1-pro-preview",
-    # Preview model, available since 2025-12-17. Superseded by `GEMINI_3_6_FLASH`,
+    # Preview model, available since 2025-12-17. Superseded by `GEMINI_3_8_FLASH`,
     # though no shutdown date has been announced.
     GEMINI_3_FLASH_PREVIEW = "gemini-3-flash-preview",
-    # Closed to new API keys and scheduled for shutdown on 2026-10-16; migrate to
-    # `GEMINI_3_1_PRO_PREVIEW`. Note: thinking cannot be disabled on this model.
+    # Retired by Google on 2026-10-16; requests to this model fail.
+    #
+    # # Deprecated
+    # The model is retired. Use `GEMINI_3_1_PRO_PREVIEW` instead. This member will be
+    # removed in the next major release.
+    @deprecated
     GEMINI_2_5_PRO = "gemini-2.5-pro",
-    # Closed to new API keys and scheduled for shutdown on 2026-10-16; migrate to
-    # `GEMINI_3_6_FLASH`.
+    # Retired by Google on 2026-10-16; requests to this model fail.
+    #
+    # # Deprecated
+    # The model is retired. Use `GEMINI_3_8_FLASH` instead. This member will be removed
+    # in the next major release.
+    @deprecated
     GEMINI_2_5_FLASH = "gemini-2.5-flash",
-    # Closed to new API keys and scheduled for shutdown on 2026-10-16; migrate to
-    # `GEMINI_3_5_FLASH_LITE`.
+    # Retired by Google on 2026-10-16; requests to this model fail.
+    #
+    # # Deprecated
+    # The model is retired. Use `GEMINI_3_5_FLASH_LITE` instead. This member will be
+    # removed in the next major release.
+    @deprecated
     GEMINI_2_5_FLASH_LITE = "gemini-2.5-flash-lite"
+}
+
+# How much internal reasoning a Gemini model performs before answering. Higher levels
+# can improve answers on complex tasks at the cost of latency and billed thinking tokens.
+# When unset, the model's own default applies (`MEDIUM` on current models).
+#
+# Gemini's `minimal` level is deliberately not offered: `gemini-3.8-flash`,
+# `gemini-4-argon` and `gemini-3.1-pro-preview` reject it with a 400.
+@display {label: "Thinking Level"}
+public enum THINKING_LEVEL {
+    # Minimizes latency and cost; suited to simple instruction following and chat
+    LOW = "low",
+    # Balanced reasoning; the default on current models
+    MEDIUM = "medium",
+    # Maximizes reasoning depth for complex tasks
+    HIGH = "high"
 }
 
 # Embedding (`:embedContent`) model types for Gemini.
@@ -227,8 +260,8 @@ type FunctionDeclaration record {|
     # Function parameters described with Gemini's OpenAPI 3.0 schema subset. Mutually
     # exclusive with `parametersJsonSchema`.
     map<json> parameters?;
-    # Function parameters described with standard JSON Schema. Supported on Gemini 2.5
-    # models and later, and accepts keywords the `parameters` subset rejects, including
+    # Function parameters described with standard JSON Schema, which every supported
+    # model accepts. Allows keywords the `parameters` subset rejects, including
     # `$ref`, `$defs`, `additionalProperties`, and `prefixItems`. Mutually exclusive
     # with `parameters`.
     map<json> parametersJsonSchema?;
@@ -255,12 +288,20 @@ type ToolConfig record {|
     FunctionCallingConfig functionCallingConfig?;
 |};
 
+# Controls the model's internal reasoning.
+type ThinkingConfig record {|
+    # Reasoning depth: "low", "medium" or "high"
+    THINKING_LEVEL thinkingLevel?;
+|};
+
 # Generation parameters controlling sampling and output shape.
 type GenerationConfig record {|
     # Sampling temperature
     decimal temperature?;
     # Upper bound on tokens generated in the response
     int maxOutputTokens?;
+    # Reasoning configuration; omitted so the model's default applies when not set
+    ThinkingConfig thinkingConfig?;
     # Sequences that, when produced, stop generation
     string[] stopSequences?;
     # Forces a response MIME type, e.g. "application/json" for structured output
@@ -269,8 +310,8 @@ type GenerationConfig record {|
     # `responseMimeType` = "application/json"). Mutually exclusive with
     # `responseJsonSchema`.
     map<json> responseSchema?;
-    # Structured-response schema in standard JSON Schema. Supported on Gemini 2.5 models
-    # and later, and accepts keywords the `responseSchema` subset rejects, including
+    # Structured-response schema in standard JSON Schema, which every supported model
+    # accepts. Allows keywords the `responseSchema` subset rejects, including
     # `$ref`, `$defs`, `additionalProperties`, and `prefixItems`. `responseMimeType` is
     # still required. Mutually exclusive with `responseSchema` — Gemini rejects requests
     # that set both.

@@ -723,11 +723,13 @@ isolated function extractTextFromCandidate(Candidate candidate) returns string? 
 # + temperature - The temperature for controlling randomness in the model's output; omitted
 #                 from the request when `()` so the model's own default applies
 # + maxTokens - The upper limit for the number of tokens in the generated response
+# + thinkingLevel - The model's reasoning depth; omitted from the request when `()` so the
+#                   model's own default applies
 # + prompt - The prompt to send
 # + expectedResponseTypedesc - The caller's expected return type
 # + return - The generated value bound to the expected type, or an `ai:Error`
 isolated function generateLlmResponse(http:Client httpClient, string apiKey, GEMINI_MODEL_NAMES modelType,
-        decimal? temperature, int maxTokens,
+        decimal? temperature, int maxTokens, THINKING_LEVEL? thinkingLevel,
         ai:Prompt prompt, typedesc<json> expectedResponseTypedesc) returns anydata|ai:Error {
     observe:GenerateContentSpan span = observe:createGenerateContentSpan(modelType);
     span.addProvider("gemini");
@@ -743,7 +745,7 @@ isolated function generateLlmResponse(http:Client httpClient, string apiKey, GEM
     }
 
     // Structured output is requested through `responseJsonSchema`, which accepts
-    // standard JSON Schema on Gemini 2.5 models and later — including `$ref`/`$defs`,
+    // standard JSON Schema on all supported models — including `$ref`/`$defs`,
     // `additionalProperties`, `title` and `prefixItems`. Only `oneOf`/`allOf` are
     // rewritten (to the documented `anyOf`). `responseSchema` must be left unset:
     // Gemini rejects a request that carries both. Note a top-level `map<T>` return type
@@ -757,6 +759,9 @@ isolated function generateLlmResponse(http:Client httpClient, string apiKey, GEM
     };
     if temperature is decimal {
         generationConfig.temperature = temperature;
+    }
+    if thinkingLevel is THINKING_LEVEL {
+        generationConfig.thinkingConfig = {thinkingLevel};
     }
     GenerateContentRequest request = {
         contents: [{role: GEMINI_ROLE_USER, parts}],
