@@ -22,28 +22,30 @@ import ballerina/http;
 public distinct isolated client class EmbeddingProvider {
     *ai:EmbeddingProvider;
     private final http:Client httpClient;
-    private final string apiKey;
+    private final AuthProvider authProvider;
     private final GEMINI_EMBEDDING_MODEL_NAMES modelType;
 
     # Initializes the Gemini embedding model with the given connection configuration.
     #
-    # + apiKey - The Gemini API key
+    # + apiKey - How to authenticate with the Gemini API: an API key (`string`), OAuth 2.0 credentials with a
+    #            refresh token (`OAuth2RefreshConfig`), or an OAuth 2.0 access token (`BearerTokenConfig`),
+    #            which is not refreshed
     # + modelType - The Gemini embedding model name
     # + serviceUrl - The base URL of Gemini API endpoint
     # + connectionConfig - Additional HTTP connection configuration
     # + return - `nil` on successful initialization; otherwise, returns an `ai:Error`
-    public isolated function init(@display {label: "API Key"} string apiKey,
+    public isolated function init(@display {label: "Authentication"} AuthConfig apiKey,
             @display {label: "Embedding Model Type"} GEMINI_EMBEDDING_MODEL_NAMES modelType,
             @display {label: "Service URL"} string serviceUrl = DEFAULT_GEMINI_SERVICE_URL,
             @display {label: "Connection Configuration"} *ConnectionConfig connectionConfig) returns ai:Error? {
-        // `ConnectionConfig` is a field-compatible subset of `http:ClientConfiguration`
-        // (it omits `auth`; Gemini authenticates via the `x-goog-api-key` header).
-        http:Client|error httpClient = new (serviceUrl, {...connectionConfig});
+        self.authProvider = check createAuthProvider(apiKey);
+        // `trap`: with `OAuth2RefreshConfig`, the HTTP client gets the first access token here, and
+        // panics if that fails.
+        http:Client|error httpClient = trap new (serviceUrl, toHttpClientConfig(apiKey, connectionConfig));
         if httpClient is error {
             return error ai:Error("Failed to initialize Gemini embedding provider", httpClient);
         }
         self.httpClient = httpClient;
-        self.apiKey = apiKey;
         self.modelType = modelType;
     }
 
@@ -67,7 +69,7 @@ public distinct isolated client class EmbeddingProvider {
                 content: {parts: [{text: content}]}
             };
             span.addInputContent(content);
-            map<string|string[]> headers = {[API_KEY_HEADER]: self.apiKey};
+            map<string|string[]> headers = self.authProvider.getHeaders();
             string path = string `/models/${self.modelType}:embedContent`;
             EmbedContentResponse response = check self.httpClient->post(path, request, headers);
 
@@ -118,7 +120,7 @@ public distinct isolated client class EmbeddingProvider {
             }
             BatchEmbedContentsRequest request = {requests};
             span.addInputContent(input);
-            map<string|string[]> headers = {[API_KEY_HEADER]: self.apiKey};
+            map<string|string[]> headers = self.authProvider.getHeaders();
             string path = string `/models/${self.modelType}:batchEmbedContents`;
             BatchEmbedContentsResponse response = check self.httpClient->post(path, request, headers);
 

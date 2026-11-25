@@ -122,9 +122,31 @@ Tool parameters and structured-output schemas are sent through Gemini's standard
 
 ## Authentication
 
-Requests are authenticated with the Gemini API key, sent automatically as the `x-goog-api-key` header. Pass the key when constructing the provider.
+The first argument, `apiKey`, sets how the connector authenticates with the Gemini API. It keeps its name so that existing code still compiles, but it accepts any of the following. The same options apply to `gemini:EmbeddingProvider`.
 
-> **Note:** because Gemini uses a custom API-key header rather than a standard scheme, the key cannot be supplied through `http:ClientAuthConfig`. Enabling HTTP trace or access logging will therefore record the key. Avoid trace logging in production.
+- **API key** (`string`): sent in the `x-goog-api-key` header. This is the simplest option.
+
+- **OAuth 2.0 with a refresh token** (`gemini:OAuth2RefreshConfig`): the connector exchanges the refresh token for a short-lived access token, sends it in the `Authorization: Bearer` header, and gets a new one before it expires. The first access token is requested when the provider is created, so invalid credentials fail at initialization. Create a desktop OAuth client in your Google Cloud project, then run `gcloud auth application-default login --client-id-file=client_secret.json --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/generative-language.retriever`. The client ID, client secret, and refresh token are stored in `~/.config/gcloud/application_default_credentials.json`. Set `quotaProjectId` to the project to bill, sent in the `x-goog-user-project` header. See [Authentication with OAuth](https://ai.google.dev/gemini-api/docs/oauth).
+
+    A refresh token stops working when it is revoked or unused for six months. It also expires **after 7 days** while the OAuth app's publishing status is **Testing**, and a Google Workspace session length policy can make the user sign in again. For a long-running server, publish the OAuth app (In production) and check your Workspace policy.
+
+    ```ballerina
+    final ai:ModelProvider geminiModel = check new gemini:ModelProvider({
+        clientId: "<client ID>",
+        clientSecret: "<client secret>",
+        refreshToken: "<refresh token>",
+        quotaProjectId: "<Google Cloud project ID>"
+    }, gemini:GEMINI_3_6_FLASH);
+    ```
+
+- **OAuth 2.0 access token** (`gemini:BearerTokenConfig`): an access token obtained elsewhere, for example with `gcloud auth application-default print-access-token`, sent in the `Authorization: Bearer` header. Set `quotaProjectId` when the token was issued to an OAuth client of another project, such as the `gcloud` default client, or the Gemini API rejects it. The connector does not refresh the token, so requests fail once it expires (after about an hour).
+
+    ```ballerina
+    final ai:ModelProvider geminiModel = check new gemini:ModelProvider(
+        {token: "<access token>", quotaProjectId: "<Google Cloud project ID>"}, gemini:GEMINI_3_6_FLASH);
+    ```
+
+> **Note:** the API key is sent in a custom header, not through `http:ClientAuthConfig`, so HTTP trace or access logs record it. They also record OAuth access tokens. Avoid trace logging in production.
 
 ## Rate limits and retries
 
