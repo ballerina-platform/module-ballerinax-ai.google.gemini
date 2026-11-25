@@ -16,6 +16,7 @@
 
 import ballerina/ai;
 import ballerina/http;
+import ballerina/oauth2;
 
 const AUTHORIZATION_HEADER = "authorization";
 # Header naming the Google Cloud project that is billed and whose quota is used for an OAuth request.
@@ -34,7 +35,9 @@ public type OAuth2RefreshConfig record {|
     # The OAuth client secret
     @display {label: "Client Secret"}
     string clientSecret;
-    # The refresh token. It does not expire unless it is revoked or unused for six months
+    # The refresh token. It stops working when it is revoked or unused for six months, after 7 days if the OAuth
+    # app's publishing status is Testing, or when a Google Workspace session length policy makes the user sign in
+    # again. For a long-running server, publish the OAuth app (In production) and check the Workspace policy
     @display {label: "Refresh Token"}
     string refreshToken;
     # The Google Cloud project to bill and to count quota against, sent in the `x-goog-user-project` header.
@@ -46,10 +49,22 @@ public type OAuth2RefreshConfig record {|
     string refreshUrl = DEFAULT_GOOGLE_TOKEN_URL;
 |};
 
+# An OAuth 2.0 access token obtained elsewhere, for example with `gcloud auth application-default print-access-token`.
+# The connector does not refresh it, so requests fail once it expires (after about an hour).
+public type BearerTokenConfig record {|
+    # The access token, sent in the `Authorization: Bearer` header
+    @display {label: "Access Token"}
+    string token;
+    # The Google Cloud project to bill and to count quota against, sent in the `x-goog-user-project` header.
+    # Needed when the token was issued to an OAuth client of a different project, such as the `gcloud` default client
+    @display {label: "Quota Project ID"}
+    string quotaProjectId?;
+|};
+
 # How the model or embedding provider authenticates with the Gemini API: an API key (`string`), OAuth 2.0 credentials
-# with a refresh token (`OAuth2RefreshConfig`), or an OAuth 2.0 access token (`http:BearerTokenConfig`), which is not
+# with a refresh token (`OAuth2RefreshConfig`), or an OAuth 2.0 access token (`BearerTokenConfig`), which is not
 # refreshed. The record types come first so that the connection form offers a record editor for them.
-public type AuthConfig OAuth2RefreshConfig|http:BearerTokenConfig|string;
+public type AuthConfig OAuth2RefreshConfig|BearerTokenConfig|string;
 
 # Provides the authentication headers for each request to the Gemini API.
 type AuthProvider isolated object {
@@ -80,13 +95,16 @@ isolated function createAuthProvider(AuthConfig auth) returns AuthProvider|ai:Er
         // Sent in the `x-goog-api-key` header, as in 1.0, so existing users see no change on the wire.
         return new StaticAuthProvider({[API_KEY_HEADER]: check validateCredential(auth, "API key")});
     }
-    if auth is http:BearerTokenConfig {
+    map<string> headers = {};
+    if auth is BearerTokenConfig {
         string token = check validateCredential(auth.token, "access token");
-        return new StaticAuthProvider({[AUTHORIZATION_HEADER]: string `Bearer ${token}`});
+        headers[AUTHORIZATION_HEADER] = string `Bearer ${token}`;
     }
     string? quotaProjectId = auth.quotaProjectId;
-    return new StaticAuthProvider(quotaProjectId is string && quotaProjectId.trim() != ""
-        ? {[QUOTA_PROJECT_HEADER]: quotaProjectId.trim()} : {});
+    if quotaProjectId is string && quotaProjectId.trim() != "" {
+        headers[QUOTA_PROJECT_HEADER] = quotaProjectId.trim();
+    }
+    return new StaticAuthProvider(headers.cloneReadOnly());
 }
 
 # Creates the HTTP client configuration. For `OAuth2RefreshConfig`, adds the refresh token grant, so the HTTP client
@@ -101,14 +119,44 @@ isolated function toHttpClientConfig(AuthConfig auth, ConnectionConfig connectio
     // spread directly.
     http:ClientConfiguration clientConfig = {...connectionConfig};
     if auth is OAuth2RefreshConfig {
-        clientConfig.auth = {
+        http:OAuth2RefreshTokenGrantConfig grantConfig = {
             refreshUrl: auth.refreshUrl,
             refreshToken: auth.refreshToken.trim(),
-            clientId: auth.clientId,
-            clientSecret: auth.clientSecret
+            clientId: auth.clientId.trim(),
+            clientSecret: auth.clientSecret.trim()
         };
+        // The token request uses the same TLS settings as the Gemini requests, such as a custom truststore.
+        http:ClientSecureSocket? secureSocket = connectionConfig.secureSocket;
+        if secureSocket is http:ClientSecureSocket {
+            grantConfig.clientConfig = {secureSocket: toOAuth2SecureSocket(secureSocket)};
+        }
+        clientConfig.auth = grantConfig;
     }
     return clientConfig;
+}
+
+# Converts the TLS settings of the HTTP client to the TLS settings of the OAuth 2.0 token request.
+#
+# + secureSocket - The TLS settings of the HTTP client
+# + return - The TLS settings of the token request
+isolated function toOAuth2SecureSocket(http:ClientSecureSocket secureSocket) returns oauth2:SecureSocket {
+    oauth2:SecureSocket tokenSecureSocket = {disable: !secureSocket.enable};
+    var cert = secureSocket?.cert;
+    if cert !is () {
+        tokenSecureSocket.cert = cert;
+    }
+    var key = secureSocket?.key;
+    if key is http:CertKey {
+        oauth2:CertKey certKey = {certFile: key.certFile, keyFile: key.keyFile};
+        string? keyPassword = key.keyPassword;
+        if keyPassword is string {
+            certKey.keyPassword = keyPassword;
+        }
+        tokenSecureSocket.key = certKey;
+    } else if key !is () {
+        tokenSecureSocket.key = key;
+    }
+    return tokenSecureSocket;
 }
 
 # Trims a credential, so a value read from a file or an environment variable with a trailing newline still works.

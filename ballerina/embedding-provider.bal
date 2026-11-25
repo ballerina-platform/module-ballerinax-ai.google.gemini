@@ -28,7 +28,7 @@ public distinct isolated client class EmbeddingProvider {
     # Initializes the Gemini embedding model with the given connection configuration.
     #
     # + apiKey - How to authenticate with the Gemini API: an API key (`string`), OAuth 2.0 credentials with a
-    #            refresh token (`OAuth2RefreshConfig`), or an OAuth 2.0 access token (`http:BearerTokenConfig`),
+    #            refresh token (`OAuth2RefreshConfig`), or an OAuth 2.0 access token (`BearerTokenConfig`),
     #            which is not refreshed
     # + modelType - The Gemini embedding model name
     # + serviceUrl - The base URL of Gemini API endpoint

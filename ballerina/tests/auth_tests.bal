@@ -17,6 +17,7 @@
 import ballerina/ai;
 import ballerina/http;
 import ballerina/lang.runtime;
+import ballerina/oauth2;
 import ballerina/test;
 
 const AUTH_MOCK_URL = "http://localhost:8097/auth";
@@ -36,6 +37,11 @@ service /auth on new http:Listener(8097) {
     resource function post [string testId]/[int expiresIn]/token(http:Request req)
             returns json|http:BadRequest|error {
         map<string> form = check req.getFormParams();
+        // The client ID and secret are sent in a Basic `Authorization` header.
+        string|http:HeaderNotFoundError authorization = req.getHeader(AUTHORIZATION_HEADER);
+        if authorization is string {
+            form["authorization"] = authorization;
+        }
         int count;
         lock {
             map<string>[] requests = tokenRequests[testId] ?: [];
@@ -153,6 +159,47 @@ function testOAuth2RefreshAuth() returns error? {
 }
 
 @test:Config
+function testOAuth2RefreshCredentialsAreTrimmed() returns error? {
+    string testId = "oauth-trimmed";
+    // Credentials read from a file or an environment variable may end with a newline.
+    OAuth2RefreshConfig config = {
+        clientId: string ` ${OAUTH_CLIENT_ID}${"\n"}`,
+        clientSecret: string `${OAUTH_CLIENT_SECRET}${"\n"}`,
+        refreshToken: string `${OAUTH_REFRESH_TOKEN}${"\n"}`,
+        refreshUrl: string `${AUTH_MOCK_URL}/${testId}/3600/token`
+    };
+    ModelProvider provider = check new (config, GEMINI_3_6_FLASH, geminiUrl(testId));
+    _ = check provider->chat([{role: ai:USER, content: "Hi"}]);
+    map<string> request = getTokenRequests(testId)[0];
+    test:assertEquals(request["refresh_token"], OAUTH_REFRESH_TOKEN);
+    test:assertEquals(request["authorization"],
+        string `Basic ${string `${OAUTH_CLIENT_ID}:${OAUTH_CLIENT_SECRET}`.toBytes().toBase64()}`);
+}
+
+@test:Config
+function testOAuth2TokenRequestUsesSecureSocket() {
+    // The token request gets the same TLS settings as the Gemini requests.
+    oauth2:SecureSocket tokenSecureSocket = toOAuth2SecureSocket({
+        cert: {path: "truststore.p12", password: "truststore-password"},
+        key: {certFile: "client.crt", keyFile: "client.key", keyPassword: "key-password"}
+    });
+    test:assertEquals(tokenSecureSocket, {
+        disable: false,
+        cert: {path: "truststore.p12", password: "truststore-password"},
+        key: {certFile: "client.crt", keyFile: "client.key", keyPassword: "key-password"}
+    });
+    test:assertEquals(toOAuth2SecureSocket({enable: false}), {disable: true});
+
+    http:ClientConfiguration clientConfig = toHttpClientConfig(oauthConfig("secure-socket"),
+        {secureSocket: {cert: "server.crt"}});
+    http:ClientAuthConfig? auth = clientConfig.auth;
+    if auth !is http:OAuth2RefreshTokenGrantConfig {
+        test:assertFail("Expected the refresh token grant");
+    }
+    test:assertEquals(auth.clientConfig?.secureSocket, {disable: false, cert: "server.crt"});
+}
+
+@test:Config
 function testOAuth2RefreshWithQuotaProject() returns error? {
     string testId = "oauth-quota-project";
     OAuth2RefreshConfig config = oauthConfig(testId, quotaProjectId = QUOTA_PROJECT);
@@ -204,11 +251,32 @@ function testOAuth2RefreshFailure() returns error? {
 @test:Config
 function testBearerTokenAuth() returns error? {
     string testId = "bearer";
-    http:BearerTokenConfig config = {token: "ya29.access-token\n"};
+    BearerTokenConfig config = {token: "ya29.access-token\n"};
     check callAll(check new (config, GEMINI_3_6_FLASH, geminiUrl(testId)),
         check new (config, GEMINI_EMBEDDING_2, geminiUrl(testId)));
     assertGeminiAuth(testId, ["chat", "generate", "embed", "batchEmbed"],
         {[AUTHORIZATION_HEADER]: "Bearer ya29.access-token"});
+}
+
+@test:Config
+function testBearerTokenWithQuotaProject() returns error? {
+    string testId = "bearer-quota-project";
+    // A token from the `gcloud` default OAuth client needs a quota project.
+    BearerTokenConfig config = {token: "ya29.access-token", quotaProjectId: string ` ${QUOTA_PROJECT}${"\n"}`};
+    check callAll(check new (config, GEMINI_3_6_FLASH, geminiUrl(testId)),
+        check new (config, GEMINI_EMBEDDING_2, geminiUrl(testId)));
+    assertGeminiAuth(testId, ["chat", "generate", "embed", "batchEmbed"],
+        {[AUTHORIZATION_HEADER]: "Bearer ya29.access-token", [QUOTA_PROJECT_HEADER]: QUOTA_PROJECT});
+}
+
+@test:Config
+function testHttpBearerTokenConfigStillAccepted() returns error? {
+    string testId = "http-bearer";
+    // Code written against the earlier `http:BearerTokenConfig` option still compiles.
+    http:BearerTokenConfig config = {token: "ya29.access-token"};
+    ModelProvider provider = check new (config, GEMINI_3_6_FLASH, geminiUrl(testId));
+    _ = check provider->chat([{role: ai:USER, content: "Hi"}]);
+    assertGeminiAuth(testId, ["chat"], {[AUTHORIZATION_HEADER]: "Bearer ya29.access-token"});
 }
 
 @test:Config

@@ -64,7 +64,7 @@ public isolated distinct client class ModelProvider {
     # Initializes the Gemini model with the given connection configuration and model configuration.
     #
     # + apiKey - How to authenticate with the Gemini API: an API key (`string`), OAuth 2.0 credentials with a
-    #            refresh token (`OAuth2RefreshConfig`), or an OAuth 2.0 access token (`http:BearerTokenConfig`),
+    #            refresh token (`OAuth2RefreshConfig`), or an OAuth 2.0 access token (`BearerTokenConfig`),
     #            which is not refreshed
     # + modelType - The Gemini model name
     # + serviceUrl - The base URL of Gemini API endpoint
