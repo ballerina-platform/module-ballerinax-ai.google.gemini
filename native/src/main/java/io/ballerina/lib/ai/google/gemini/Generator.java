@@ -38,7 +38,7 @@ public class Generator {
                 // "Value creator object is not available for: ballerinax/ai.google.gemini".
                 new Module("ballerinax", "ai.google.gemini", "1"), "generateLlmResponse", null,
                 modelProvider.get(StringUtils.fromString("httpClient")),
-                modelProvider.get(StringUtils.fromString("apiKey")),
+                modelProvider.get(StringUtils.fromString("authProvider")),
                 modelProvider.get(StringUtils.fromString("modelType")),
                 modelProvider.get(StringUtils.fromString("temperature")),
                 modelProvider.get(StringUtils.fromString("maxTokens")),
