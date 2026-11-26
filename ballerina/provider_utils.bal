@@ -718,7 +718,7 @@ isolated function extractTextFromCandidate(Candidate candidate) returns string? 
 # and the returned JSON text is parsed back into the expected type.
 #
 # + httpClient - The provider's HTTP client
-# + apiKey - The Gemini API key, sent as the `x-goog-api-key` header
+# + authProvider - Provides the authentication headers for the request
 # + modelType - The Gemini model to invoke
 # + temperature - The temperature for controlling randomness in the model's output; omitted
 #                 from the request when `()` so the model's own default applies
@@ -728,8 +728,8 @@ isolated function extractTextFromCandidate(Candidate candidate) returns string? 
 # + prompt - The prompt to send
 # + expectedResponseTypedesc - The caller's expected return type
 # + return - The generated value bound to the expected type, or an `ai:Error`
-isolated function generateLlmResponse(http:Client httpClient, string apiKey, GEMINI_MODEL_NAMES modelType,
-        decimal? temperature, int maxTokens, THINKING_LEVEL? thinkingLevel,
+isolated function generateLlmResponse(http:Client httpClient, AuthProvider authProvider,
+        GEMINI_MODEL_NAMES modelType, decimal? temperature, int maxTokens, THINKING_LEVEL? thinkingLevel,
         ai:Prompt prompt, typedesc<json> expectedResponseTypedesc) returns anydata|ai:Error {
     observe:GenerateContentSpan span = observe:createGenerateContentSpan(modelType);
     span.addProvider("gemini");
@@ -769,7 +769,7 @@ isolated function generateLlmResponse(http:Client httpClient, string apiKey, GEM
     };
     span.addInputMessages(request.contents.toJson());
 
-    map<string|string[]> headers = {[API_KEY_HEADER]: apiKey};
+    map<string|string[]> headers = authProvider.getHeaders();
     string path = string `/models/${modelType}:generateContent`;
     GenerateContentResponse|error response = httpClient->post(path, request, headers);
     if response is error {

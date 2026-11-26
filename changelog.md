@@ -5,6 +5,10 @@ This file documents all significant changes made to the Ballerina `ai.google.gem
 ## [Un-released]
 
 ### Added
+- OAuth 2.0 authentication. The `apiKey` parameter of `ModelProvider` and `EmbeddingProvider` also accepts an
+  `OAuth2RefreshConfig` (a refresh token that the HTTP client exchanges for access tokens and refreshes, with an
+  optional quota project sent in `x-goog-user-project`) or a `BearerTokenConfig` (an access token that is not
+  refreshed, with the same optional quota project). A `string` is still an API key, sent in `x-goog-api-key`.
 - `GEMINI_3_8_FLASH` and `GEMINI_4_ARGON` models. `GEMINI_3_8_FLASH` is now the recommended default.
 - Optional `thinkingLevel` (`LOW`, `MEDIUM`, `HIGH`) on `ModelProvider`, sent as
   `generationConfig.thinkingConfig.thinkingLevel` from both `chat` and `generate`.
