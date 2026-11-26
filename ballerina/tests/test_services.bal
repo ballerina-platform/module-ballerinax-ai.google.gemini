@@ -328,6 +328,17 @@ function validateGenerateContentRequest(string promptText, json payload) {
                 "nested record return");
     }
 
+    // Sent by `tunedProvider` from both chat() and generate(): the configured thinking
+    // level and temperature must both reach `generationConfig`.
+    if promptText.startsWith("Thinking config check") {
+        map<json> genConfig = generationConfig(obj);
+        test:assertEquals(genConfig["thinkingConfig"], <json>{thinkingLevel: "high"},
+                "thinkingLevel must be sent as generationConfig.thinkingConfig.thinkingLevel");
+        // Compared as text: the JSON number may bind as a decimal or a float.
+        test:assertEquals(genConfig["temperature"].toString(), "0.5",
+                "temperature must be forwarded when set");
+    }
+
     if promptText.startsWith("Config check") {
         map<json> genConfig = generationConfig(obj);
         // `temperature` is omitted unless the caller sets it, so the model's own default
@@ -335,7 +346,7 @@ function validateGenerateContentRequest(string promptText, json payload) {
         test:assertFalse(genConfig.hasKey("temperature"),
                 "temperature must be omitted from generate() when unset");
         test:assertFalse(genConfig.hasKey("thinkingConfig"),
-                "thinkingConfig must never be sent; the connector does not expose a thinking budget");
+                "thinkingConfig must be omitted when thinkingLevel is unset, so the model's default applies");
         test:assertEquals(genConfig["maxOutputTokens"], DEFAULT_MAX_TOKEN_COUNT,
                 "maxTokens must be forwarded to generate()");
         test:assertEquals(genConfig["responseMimeType"], "application/json");
@@ -476,8 +487,11 @@ isolated function getMockResultText(string message) returns string {
     if message.startsWith("Stop test") {
         return "Stopping now.";
     }
-    if message.startsWith("Config check") {
+    if message.startsWith("Config check") || message.startsWith("Thinking config check: rate") {
         return "{\"result\": 5}";
+    }
+    if message.startsWith("Thinking config check") {
+        return "Thought it through.";
     }
     if message.startsWith("Evaluate") {
         return "{\"result\": [9, 1]}";

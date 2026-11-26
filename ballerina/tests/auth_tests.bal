@@ -135,7 +135,7 @@ function testApiKeyAuth() returns error? {
     string testId = "api-key";
     // A string is still an API key, sent in `x-goog-api-key` and trimmed.
     string key = string ` ${API_KEY}${"\n"}`;
-    check callAll(check new (key, GEMINI_3_6_FLASH, geminiUrl(testId)),
+    check callAll(check new (key, GEMINI_3_8_FLASH, geminiUrl(testId)),
         check new (key, GEMINI_EMBEDDING_2, geminiUrl(testId)));
     assertGeminiAuth(testId, ["chat", "generate", "embed", "batchEmbed"], {[API_KEY_HEADER]: API_KEY});
 }
@@ -144,7 +144,7 @@ function testApiKeyAuth() returns error? {
 function testOAuth2RefreshAuth() returns error? {
     string testId = "oauth-refresh";
     OAuth2RefreshConfig config = oauthConfig(testId);
-    check callAll(check new (config, GEMINI_3_6_FLASH, geminiUrl(testId)),
+    check callAll(check new (config, GEMINI_3_8_FLASH, geminiUrl(testId)),
         check new (config, GEMINI_EMBEDDING_2, geminiUrl(testId)));
     // The model and embedding providers each get an access token with the refresh token, and reuse it.
     assertGeminiAuth(testId, ["chat", "generate"],
@@ -168,7 +168,7 @@ function testOAuth2RefreshCredentialsAreTrimmed() returns error? {
         refreshToken: string `${OAUTH_REFRESH_TOKEN}${"\n"}`,
         refreshUrl: string `${AUTH_MOCK_URL}/${testId}/3600/token`
     };
-    ModelProvider provider = check new (config, GEMINI_3_6_FLASH, geminiUrl(testId));
+    ModelProvider provider = check new (config, GEMINI_3_8_FLASH, geminiUrl(testId));
     _ = check provider->chat([{role: ai:USER, content: "Hi"}]);
     map<string> request = getTokenRequests(testId)[0];
     test:assertEquals(request["refresh_token"], OAUTH_REFRESH_TOKEN);
@@ -203,7 +203,7 @@ function testOAuth2TokenRequestUsesSecureSocket() {
 function testOAuth2RefreshWithQuotaProject() returns error? {
     string testId = "oauth-quota-project";
     OAuth2RefreshConfig config = oauthConfig(testId, quotaProjectId = QUOTA_PROJECT);
-    check callAll(check new (config, GEMINI_3_6_FLASH, geminiUrl(testId)),
+    check callAll(check new (config, GEMINI_3_8_FLASH, geminiUrl(testId)),
         check new (config, GEMINI_EMBEDDING_2, geminiUrl(testId)));
     assertGeminiAuth(testId, ["chat", "generate"], {
         [AUTHORIZATION_HEADER]: string `Bearer oauth-access-token-${testId}-1`,
@@ -219,7 +219,7 @@ function testOAuth2RefreshWithQuotaProject() returns error? {
 function testOAuth2RefreshesExpiredAccessToken() returns error? {
     string testId = "oauth-expiry";
     // The HTTP client refreshes the access token when it is about to expire.
-    ModelProvider provider = check new (oauthConfig(testId, expiresIn = 2), GEMINI_3_6_FLASH, geminiUrl(testId));
+    ModelProvider provider = check new (oauthConfig(testId, expiresIn = 2), GEMINI_3_8_FLASH, geminiUrl(testId));
     _ = check provider->chat([{role: ai:USER, content: "Hi"}]);
     runtime:sleep(2.5);
     _ = check provider->chat([{role: ai:USER, content: "Hi"}]);
@@ -233,7 +233,7 @@ function testOAuth2RefreshFailure() returns error? {
     string testId = "oauth-revoked";
     // The HTTP client gets the first access token when it is created, so a revoked refresh token fails the
     // provider initialization instead of the first request.
-    ModelProvider|ai:Error provider = new (oauthConfig(testId, expiresIn = -1), GEMINI_3_6_FLASH, geminiUrl(testId));
+    ModelProvider|ai:Error provider = new (oauthConfig(testId, expiresIn = -1), GEMINI_3_8_FLASH, geminiUrl(testId));
     if provider !is ai:Error {
         test:assertFail("Expected an ai:Error when the refresh token is revoked");
     }
@@ -252,7 +252,7 @@ function testOAuth2RefreshFailure() returns error? {
 function testBearerTokenAuth() returns error? {
     string testId = "bearer";
     BearerTokenConfig config = {token: "ya29.access-token\n"};
-    check callAll(check new (config, GEMINI_3_6_FLASH, geminiUrl(testId)),
+    check callAll(check new (config, GEMINI_3_8_FLASH, geminiUrl(testId)),
         check new (config, GEMINI_EMBEDDING_2, geminiUrl(testId)));
     assertGeminiAuth(testId, ["chat", "generate", "embed", "batchEmbed"],
         {[AUTHORIZATION_HEADER]: "Bearer ya29.access-token"});
@@ -263,7 +263,7 @@ function testBearerTokenWithQuotaProject() returns error? {
     string testId = "bearer-quota-project";
     // A token from the `gcloud` default OAuth client needs a quota project.
     BearerTokenConfig config = {token: "ya29.access-token", quotaProjectId: string ` ${QUOTA_PROJECT}${"\n"}`};
-    check callAll(check new (config, GEMINI_3_6_FLASH, geminiUrl(testId)),
+    check callAll(check new (config, GEMINI_3_8_FLASH, geminiUrl(testId)),
         check new (config, GEMINI_EMBEDDING_2, geminiUrl(testId)));
     assertGeminiAuth(testId, ["chat", "generate", "embed", "batchEmbed"],
         {[AUTHORIZATION_HEADER]: "Bearer ya29.access-token", [QUOTA_PROJECT_HEADER]: QUOTA_PROJECT});
@@ -274,7 +274,7 @@ function testHttpBearerTokenConfigStillAccepted() returns error? {
     string testId = "http-bearer";
     // Code written against the earlier `http:BearerTokenConfig` option still compiles.
     http:BearerTokenConfig config = {token: "ya29.access-token"};
-    ModelProvider provider = check new (config, GEMINI_3_6_FLASH, geminiUrl(testId));
+    ModelProvider provider = check new (config, GEMINI_3_8_FLASH, geminiUrl(testId));
     _ = check provider->chat([{role: ai:USER, content: "Hi"}]);
     assertGeminiAuth(testId, ["chat"], {[AUTHORIZATION_HEADER]: "Bearer ya29.access-token"});
 }
@@ -286,7 +286,7 @@ function testEmptyCredentialFails() {
         [" \n", "The Gemini API key is empty"],
         [{token: ""}, "The Gemini access token is empty"]
     ] {
-        ModelProvider|ai:Error provider = new (auth, GEMINI_3_6_FLASH);
+        ModelProvider|ai:Error provider = new (auth, GEMINI_3_8_FLASH);
         if provider !is ai:Error {
             test:assertFail("Expected an ai:Error for an empty credential");
         }

@@ -26,7 +26,10 @@ const PDF_URL = "http://localhost:8080/llm/assets/sample.pdf";
 // 302s to IMAGE_URL, for the manual redirect loop.
 const REDIRECT_IMAGE_URL = "http://localhost:8080/llm/redirect/sample.png";
 
-final ModelProvider provider = check new (API_KEY, GEMINI_3_6_FLASH, SERVICE_URL);
+final ModelProvider provider = check new (API_KEY, GEMINI_3_8_FLASH, SERVICE_URL);
+// Sets the optional generation settings, so the mock can assert they are forwarded.
+final ModelProvider tunedProvider = check new (API_KEY, GEMINI_4_ARGON, SERVICE_URL,
+        temperature = 0.5, thinkingLevel = HIGH);
 final EmbeddingProvider embeddingProvider = check new (API_KEY, GEMINI_EMBEDDING_2, SERVICE_URL);
 
 // ── chat ───────────────────────────────────────────────────────────────────
@@ -488,6 +491,41 @@ function testGenerateMapReturnTypeIsUnsupported() returns ai:Error? {
 function testGenerateForwardsGenerationConfig() returns ai:Error? {
     // The mock asserts temperature/maxOutputTokens/responseMimeType are present.
     int result = check provider->generate(`Config check: rate this out of 10`);
+    test:assertEquals(result, 5);
+}
+
+@test:Config
+function testTemperatureWarningOnDeprecatedModels() {
+    // Google deprecates temperature on these models in favour of thinkingLevel.
+    GEMINI_MODEL_NAMES[] models = [GEMINI_4_ARGON, GEMINI_3_8_FLASH];
+    foreach GEMINI_MODEL_NAMES model in models {
+        string? warning = temperatureWarning(model, 0.5);
+        test:assertTrue(warning is string, string `expected a temperature warning for ${model}`);
+        test:assertTrue((<string>warning).includes(model), "the warning must name the model");
+        test:assertTrue((<string>warning).includes("thinkingLevel"), "the warning must point to thinkingLevel");
+    }
+}
+
+@test:Config
+function testNoTemperatureWarningWhenNotApplicable() {
+    // No warning when temperature is unset, or on models that still support it.
+    test:assertEquals(temperatureWarning(GEMINI_4_ARGON, ()), ());
+    test:assertEquals(temperatureWarning(GEMINI_3_8_FLASH, ()), ());
+    test:assertEquals(temperatureWarning(GEMINI_3_6_FLASH, 0.5), ());
+    test:assertEquals(temperatureWarning(GEMINI_3_1_PRO_PREVIEW, 0.5), ());
+}
+
+@test:Config
+function testChatForwardsThinkingLevel() returns ai:Error? {
+    // The mock asserts thinkingConfig.thinkingLevel and temperature are present.
+    ai:ChatAssistantMessage result = check tunedProvider->chat([{role: ai:USER, content: "Thinking config check"}]);
+    test:assertEquals(result.content, "Thought it through.");
+}
+
+@test:Config
+function testGenerateForwardsThinkingLevel() returns ai:Error? {
+    // Exercises the native `Generator` shim, which must pass `thinkingLevel` through.
+    int result = check tunedProvider->generate(`Thinking config check: rate this out of 10`);
     test:assertEquals(result, 5);
 }
 
